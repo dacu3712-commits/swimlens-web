@@ -1,0 +1,15 @@
+{
+  "name": "SwimLens — 수영 영상 AI 분석",
+  "short_name": "SwimLens",
+  "description": "수영 영상을 올리면 8가지 기술 지표를 분석하고 PDF 리포트를 만듭니다",
+  "lang": "ko",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f7fb",
+  "theme_color": "#0f4c81",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

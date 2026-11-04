@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f4c81">
+<meta name="description" content="SwimLens — 수영 영상을 올리면 8가지 기술 지표를 분석하고 PDF 리포트를 만드는 브라우저 앱 (배신튜브 박상우 코치)">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="SwimLens">
+<title>SwimLens</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="styles.css">
+<style>@font-face{font-family:"Noto Sans KR";src:url(vendor/fonts/NotoSansKR-Regular-subset.ttf) format("truetype");font-weight:400}@font-face{font-family:"Noto Sans KR";src:url(vendor/fonts/NotoSansKR-Bold-subset.ttf) format("truetype");font-weight:700}</style>
+</head>
+<body>
+<header class="top"><div class="brand">🏊 SwimLens</div><nav id="nav"><button data-step="0">① 설정</button><button data-step="1">② 분석</button><button data-step="2">③ 검수</button><button data-step="3">④ 리포트</button></nav><button id="menuBtn" class="ghost" title="이전 분석">📂</button></header>
+<main id="app"><div class="boot">SwimLens 불러오는 중…</div></main>
+<aside id="drawer" class="drawer" hidden><div class="drawer-head"><b>이전 분석</b><button id="drawerClose" class="ghost">✕</button></div><div id="sessionList"></div></aside>
+<div id="toast" class="toast" hidden></div>
+<noscript>자바스크립트를 켜야 합니다.</noscript>
+<script src="vendor/jsyaml/js-yaml.min.js"></script>
+<script src="vendor/chartjs/chart.umd.js"></script>
+<script src="vendor/pdf-lib/pdf-lib.min.js"></script>
+<script src="vendor/pdf-lib/fontkit.umd.min.js"></script>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

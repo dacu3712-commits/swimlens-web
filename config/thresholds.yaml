@@ -1,0 +1,87 @@
+# =====================================================================
+# SwimLens 판정 기준값
+# 코치가 직접 수정할 수 있는 파일입니다. 숫자만 바꾸고 저장하면 다음 분석부터 반영됩니다.
+# 단위: 각도 = 도(°), 시간 = 초(s) 또는 밀리초(ms), 비율 = %
+# 신호등: green(초록) = 권장, yellow(노랑) = 주의, red(빨강) = 개선 필요
+# =====================================================================
+
+# ---------- 공통 ----------
+common:
+  min_visibility: 0.5          # 이 값 미만 관절은 결측 처리
+  max_interp_gap_frames: 5     # 이 프레임 수 이하의 결측만 선형 보간
+  smoothing_window_frames: 9   # Savitzky-Golay 창 크기 (홀수)
+  smoothing_polyorder: 2
+  min_fps_warning: 30          # 이 FPS 미만이면 경고
+  confidence_review_threshold: 60   # 신뢰도가 이 값 미만이면 "검수 필요"
+  reference_view_factor: 0.6   # 매트릭스에서 △(참고용) 구도일 때 신뢰도에 곱하는 계수
+  interp_penalty_weight: 1.0   # 신뢰도 = visibility평균 × (1 − 보간비율 × 이 값)
+
+# ---------- 사이클 분할 ----------
+cycle:
+  min_cycle_sec: 0.6           # 이보다 짧은 사이클은 잡음으로 무시
+  max_cycle_sec: 3.0
+  peak_prominence_ratio: 0.3   # 손목 x 진폭 대비 피크 돌출 최소 비율
+
+# ---------- 카메라 이동 감지 ----------
+camera_motion:
+  flow_threshold_px: 1.5       # 배경 광류 중앙값(픽셀/프레임)이 이 값을 넘으면 '이동'
+  moving_ratio_threshold: 0.2  # 전체 프레임 중 이동 프레임 비율이 이 값 이상이면 '이동 촬영'
+
+# ---------- 1. 팔꿈치 캐치 각도 ----------
+catch_angle:
+  green: [90, 110]
+  yellow_margin: 15            # 초록 범위 밖 ±15° 이내 = 노랑, 그 외 = 빨강
+
+# ---------- 2. 구간별 소요 시간 ----------
+split_time:
+  # 권장 비율 범위가 정해지기 전까지는 비율만 표시 (신호등 없음)
+  use_traffic_light: false
+  left_right_diff_yellow_pct: 10   # 좌/우 같은 구간 비율 차이가 10%p 이상이면 노랑
+  # 참고용 권장 비율(%) — 코치가 채우면 use_traffic_light: true 로 켤 수 있음
+  reference_ratio:
+    catch: null
+    pull: null
+    finish: null
+    recovery: null
+
+# ---------- 3. 몸통 롤링 ----------
+rolling:
+  green: [35, 55]
+  yellow_margin: 10
+  asymmetry_yellow_deg: 5      # 좌우 최대 롤링 차이
+  asymmetry_red_deg: 10
+
+# ---------- 4. 손 물속 궤적 ----------
+hand_path:
+  use_traffic_light: false     # 깊이/폭은 수치만 표시
+  crossover_yellow: true       # 안쪽 진입이 몸 중심선을 넘으면 노랑 (크로스오버)
+  crossover_margin_ratio: 0.05 # 어깨 너비 대비 중심선 통과 허용 여유
+
+# ---------- 5. 무릎/골반 굴곡각 & 킥 타이밍 ----------
+knee_hip_kick:
+  knee_green: [110, 140]       # 킥 직전 무릎 최대 접힘 권장 범위
+  knee_yellow_margin: 10
+  knee_red_below: 100          # 과도한 접힘
+  timing_match_ms: 100         # ±100ms 이내 = 타이밍 일치
+  kick_peak_min_distance_sec: 0.15  # 킥 피크 간 최소 간격
+  freestyle_timing_enabled: false   # 자유형은 각도만 산출 (Q6 기본값)
+
+# ---------- 6. 노브레싱 vs 브레싱 속도 ----------
+breathing_speed:
+  slowdown_green_pct: 5        # 감속률 5% 미만 초록
+  slowdown_yellow_pct: 10      # 5~10% 노랑, 초과 빨강
+  nose_visibility_drop: 0.3    # 코 visibility가 이 값 아래로 떨어지면 고개 돌림 후보
+  min_nobreath_strokes: 2      # 노브레싱 구간으로 인정할 최소 연속 스트로크 수
+
+# ---------- 7. 브레이크아웃 ----------
+breakout:
+  pushoff_speed_jump_ratio: 2.0    # 골반 속도가 직전 평균의 2배 이상 급증 = 벽 차기
+  kick_amplitude_min_ratio: 0.02   # 발목 진동 진폭(화면 높이 대비)이 이 값 이상이면 킥 시작
+  timing_match_ms: 100             # 첫 캐치 vs 머리 출수 시간차 ±100ms = 일치
+
+# ---------- 8. 유선형 유지력 ----------
+streamline:
+  sink_angle_green_max: 5      # 0~5° 좋음
+  sink_angle_yellow_max: 10    # 5~10° 보통, 10° 이상 개선 필요
+  hip_bend_yellow_deg: 8       # 골반 꺾임 각도 주의
+  hip_bend_red_deg: 15

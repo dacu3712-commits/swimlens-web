@@ -1,0 +1,80 @@
+# 구도별 측정 가능 지표 매트릭스
+# ok = 측정, ref = 참고용(신뢰도 낮음), no = 측정 불가
+# 구도 키: side_under(측면-수중) side_above(측면-수상) front(정면) back(후면) bottom(바닥)
+views:
+  side_under: {name: "측면-수중"}
+  side_above: {name: "측면-수상"}
+  front:      {name: "정면"}
+  back:       {name: "후면"}
+  bottom:     {name: "바닥(수중 아래)"}
+
+metrics:
+  catch_angle:
+    name: "팔꿈치 캐치 각도"
+    side_under: ok
+    side_above: ref
+    front: ref
+    back: ref
+    bottom: no
+    reason_no: "바닥 구도에서는 팔꿈치 각도의 깊이 방향 정보가 없어 측정할 수 없습니다"
+  split_time:
+    name: "구간별 소요 시간"
+    side_under: ok
+    side_above: ref
+    front: no
+    back: no
+    bottom: ref
+    reason_no: "정면/후면 구도에서는 손의 전후 이동을 구분할 수 없습니다"
+  rolling:
+    name: "몸통 롤링 각도"
+    side_under: no
+    side_above: no
+    front: ok
+    back: ok
+    bottom: no
+    reason_no: "롤링은 정면 또는 후면 구도에서만 측정할 수 있습니다"
+  hand_path:
+    name: "손 물속 궤적"
+    side_under: ok
+    side_above: no
+    front: ok
+    back: ok
+    bottom: ok
+    reason_no: "수상 구도에서는 물속 손 궤적이 보이지 않습니다"
+  knee_hip_kick:
+    name: "무릎/골반 굴곡각 & 킥 타이밍"
+    side_under: ok
+    side_above: no
+    front: no
+    back: no
+    bottom: no
+    reason_no: "무릎·골반 각도와 킥 타이밍은 측면-수중 구도에서만 측정할 수 있습니다"
+  breathing_speed:
+    name: "노브레싱 vs 브레싱 속도"
+    side_under: ok
+    side_above: ok
+    front: no
+    back: no
+    bottom: no
+    reason_no: "속도 비교는 측면 구도(고정 카메라)에서만 측정할 수 있습니다"
+  breakout:
+    name: "브레이크아웃"
+    side_under: ok
+    side_above: ref
+    front: no
+    back: no
+    bottom: no
+    reason_no: "브레이크아웃은 측면 구도에서만 측정할 수 있습니다"
+  streamline:
+    name: "유선형 유지력"
+    side_under: ok
+    side_above: ref
+    front: no
+    back: no
+    bottom: no
+    reason_no: "유선형 각도는 측면 구도에서만 측정할 수 있습니다"
+
+# 카메라 이동 시 '측정 불가' 처리할 지표 (속도·거리 계열)
+camera_motion_blocked:
+  - breathing_speed
+  - breakout_distance
