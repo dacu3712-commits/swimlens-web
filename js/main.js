@@ -10,12 +10,13 @@ import { buildPdf, keyValues } from "./report/pdf.js";
 import { autoTop3 } from "./report/summary.js";
 import * as db from "./storage.js";
 import * as cloud from "./cloud.js";
+import { initPhoto, renderPhoto, openPhotoSession } from "./photo.js";
 
 const TRAFFIC = { green: ["🟢", "좋음"], yellow: ["🟡", "주의"], red: ["🔴", "개선 필요"], na: ["⚪", "측정 불가"], info: ["🔵", "참고"] };
 const $ = (s, el = document) => el.querySelector(s);
 const app = $("#app");
-const S = { step: 0, configs: null, video: null, file: null, videoInfo: null, clicks: { wl: [], sc: [] }, clickMode: "wl", settings: defaultSettings(), session: null, landmarker: null, landmarkerVariant: null, running: false, stop: false, tab: 0, editFrame: null, editJoint: "right_elbow", frameCache: new Map(), fonts: null };
-function defaultSettings() { return { student_name: "수강생", stroke: "freestyle", view: "side_under", direction: "ltr", camera_side_arm: "right", camera_mode: "fixed", waterline: null, scale_points: null, scale_meters: null, underwater_preprocess: true, model: "auto", frame_step: isMobile() ? 2 : 1, max_long_side: 960, cloud_video: false }; }
+const S = { step: 0, configs: null, video: null, file: null, videoInfo: null, clicks: { wl: [], sc: [], roi: [] }, clickMode: "wl", settings: defaultSettings(), session: null, landmarker: null, landmarkerVariant: null, running: false, stop: false, tab: 0, editFrame: null, editJoint: "right_elbow", frameCache: new Map(), fonts: null };
+function defaultSettings() { return { student_name: "수강생", stroke: "freestyle", view: "side_under", direction: "ltr", camera_side_arm: "right", camera_mode: "fixed", waterline: null, scale_points: null, scale_meters: null, underwater_preprocess: true, model: "auto", frame_step: isMobile() ? 2 : 1, max_long_side: 960, cloud_video: false, seg_start: 0, seg_end: null }; }
 function isMobile() { return /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent); }
 function toast(msg, ms = 2500) { const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(t._h); t._h = setTimeout(() => t.hidden = true, ms); }
 function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
@@ -32,7 +33,8 @@ async function grabFrame(frameIdx) {
   const copy = document.createElement("canvas"); copy.width = c.width; copy.height = c.height; copy.getContext("2d").drawImage(c, 0, 0);
   if (S.frameCache.size > 40) S.frameCache.delete(S.frameCache.keys().next().value); S.frameCache.set(key, copy); return copy;
 }
-async function captureURL(spec, width = 480) { const lm = S.session.lm; const i = lm.indexOfFrame(spec.frame); const fc = await grabFrame(lm.frame[i]); return renderCapture(fc, lm, i, spec, width); }
+function viewLm() { const s = S.session; return s.lmView || s.lm; }
+async function captureURL(spec, width = 480) { const lm = viewLm(); const i = lm.indexOfFrame(spec.frame); const fc = await grabFrame(lm.frame[i]); return renderCapture(fc, lm, i, spec, width); }
 
 // ------------------------------------------------------------ 세션 저장/복원
 async function persist() {
@@ -55,6 +57,7 @@ async function uploadVideoIfWanted() {
 }
 async function openSession(id) {
   const rec = await db.getSession(id); if (!rec) return toast("세션을 찾을 수 없습니다");
+  if (rec.kind === "photo") { await openPhotoSession(rec); $("#drawer").hidden = true; go(4); return; }
   S.session = { ...rec, lm: rec.lm ? Landmarks.fromJSON(rec.lm) : null }; S.settings = { ...rec.settings }; S.frameCache.clear();
   if (rec.videoBlob) { S.file = rec.videoBlob; S.video = await loadVideo(rec.videoBlob); S.videoInfo = { ...rec.videoInfo }; } else { S.video = null; toast("이 세션에는 영상이 저장되어 있지 않아 캡처 이미지는 표시되지 않습니다.", 4000); }
   $("#drawer").hidden = true;
@@ -64,7 +67,7 @@ async function openSession(id) {
 /** 앱을 열 때 중단된 분석이 있으면 이어하기 안내 */
 async function checkInterrupted() {
   try {
-    const list = await db.listSessions(); const cand = list.find(x => !x.hasMetrics);
+    const list = await db.listSessions(); const cand = list.find(x => x.kind !== "photo" && !x.hasMetrics && x.hasPartial);
     if (!cand) return; const rec = await db.getSession(cand.id); if (!rec?.partial || !rec.videoBlob) return;
     const pct = Math.round(rec.partial.k / Math.max(1, rec.partial.n) * 100);
     const box = document.createElement("div"); box.className = "card"; box.style.borderColor = "#0f4c81";
@@ -82,7 +85,7 @@ async function renderDrawer() {
   if (u) { const r = await cloud.listCloud(); cloudRows = r.rows; if (!r.ok) el.innerHTML = loginHtml + `<div class="warn">서버 목록을 불러오지 못했습니다 (${r.status}). schema.sql 실행 여부를 확인하세요.</div>`; }
   const localIds = new Set(local.map(s => s.id)); const cloudIds = new Set(cloudRows.map(s => s.id));
   const items = [...local.map(s => ({ ...s, where: cloudIds.has(s.id) ? "both" : "local" })), ...cloudRows.filter(c => !localIds.has(c.id)).map(c => ({ id: c.id, name: c.name, created: c.created, settings: c.settings || {}, hasMetrics: c.has_metrics, where: "cloud", pdf_path: c.pdf_path, video_path: c.video_path }))].sort((a, b) => b.created - a.created);
-  const rows = items.length ? items.map(s => `<div class="sess"><b>${esc(s.name)} ${s.where === "cloud" ? "☁" : s.where === "both" ? "☁📱" : "📱"}</b><span class="muted">${new Date(s.created).toLocaleString("ko-KR")} · ${STROKES[s.settings.stroke] || ""} · ${VIEWS[s.settings.view] || ""}${s.hasMetrics ? "" : " · 미완료"}</span><div class="row"><button class="btn small" data-open="${s.id}" data-where="${s.where}">열기</button>${s.pdf_path ? `<button class="btn small sec" data-pdf="${esc(s.pdf_path)}">PDF</button>` : ""}<button class="btn small sec" data-del="${s.id}" data-where="${s.where}">삭제</button></div></div>`).join("") : `<p class="muted">저장된 분석이 없습니다.</p>`;
+  const rows = items.length ? items.map(s => `<div class="sess"><b>${esc(s.name)} ${s.where === "cloud" ? "☁" : s.where === "both" ? "☁📱" : "📱"}</b><span class="muted">${new Date(s.created).toLocaleString("ko-KR")} · ${STROKES[s.settings.stroke] || ""} · ${s.kind === "photo" ? "📷 사진 분석" : VIEWS[s.settings.view] || ""}${s.hasMetrics ? "" : " · 미완료"}</span><div class="row"><button class="btn small" data-open="${s.id}" data-where="${s.where}">열기</button>${s.pdf_path ? `<button class="btn small sec" data-pdf="${esc(s.pdf_path)}">PDF</button>` : ""}<button class="btn small sec" data-del="${s.id}" data-where="${s.where}">삭제</button></div></div>`).join("") : `<p class="muted">저장된 분석이 없습니다.</p>`;
   el.innerHTML = (el.innerHTML.includes("서버 목록을") ? el.innerHTML : loginHtml) + rows;
   $("#loginBtn")?.addEventListener("click", async () => { const m = $("#loginMsg"); m.textContent = "로그인 중…"; const r = await cloud.login($("#loginEmail").value.trim(), $("#loginPw").value); if (r.ok) { toast("로그인 성공 — 결과가 서버에도 저장됩니다"); renderDrawer(); if (S.session) syncCloud(); render(); } else m.textContent = r.msg; });
   $("#logoutBtn")?.addEventListener("click", () => { cloud.logout(); renderDrawer(); render(); });
@@ -106,7 +109,7 @@ function renderSetup() {
   const mx = S.configs.matrix.metrics; const matrixRows = Object.values(mx).map(spec => { const s2 = spec[st.view] || "no"; return `<li>${s2 === "ok" ? "✅" : s2 === "ref" ? "△" : "❌"} ${spec.name}${s2 === "no" ? ` <span class="muted">— ${spec.reason_no}</span>` : s2 === "ref" ? " <span class='muted'>(참고용)</span>" : ""}</li>`; }).join("");
   app.innerHTML = `
   <div class="card"><h2>① 분석 설정</h2><p class="muted">영상을 올리고 촬영 조건을 고르세요. 모든 분석은 이 기기 안에서만 이루어지며 영상이 서버로 전송되지 않습니다.</p>
-    <label class="drop" id="drop"><input type="file" id="file" accept="video/*,.mp4,.mov,.m4v,.webm"><div>${S.file ? `📼 <b>${esc(S.file.name)}</b> (${(S.file.size / 1e6).toFixed(1)} MB) — 다른 영상을 올리려면 여기를 누르세요` : "📼 여기를 눌러 영상을 고르거나 끌어다 놓으세요 (mp4 / mov)"}</div><div class="muted">권장: 20~40초 클립, 30fps 이상, 고정 카메라</div></label>
+    <p class="muted">🎞 영상 대신 <b>캡처 사진 몇 장</b>으로 분석하려면 위쪽 <b>📷 사진</b> 탭을 쓰세요.</p><label class="drop" id="drop"><input type="file" id="file" accept="video/*,.mp4,.mov,.m4v,.webm"><div>${S.file ? `📼 <b>${esc(S.file.name)}</b> (${(S.file.size / 1e6).toFixed(1)} MB) — 다른 영상을 올리려면 여기를 누르세요` : "📼 여기를 눌러 영상을 고르거나 끌어다 놓으세요 (mp4 / mov)"}</div><div class="muted">권장: 20~40초 클립, 30fps 이상, 고정 카메라</div></label>
     ${S.videoInfo ? `<p class="muted">영상: ${S.videoInfo.width}x${S.videoInfo.height} @ ${S.videoInfo.fps}fps, ${S.videoInfo.duration.toFixed(1)}초 ${S.videoInfo.fps < 30 ? '<span class="warn">FPS 가 30 미만이라 타이밍 정밀도가 낮습니다</span>' : ""}</p>` : ""}
   </div>
   <div class="card"><div class="grid">
@@ -125,8 +128,18 @@ function renderSetup() {
   <details><summary class="muted">고급: 파이썬 버전에서 만든 landmarks.csv 가져오기 (자세 추정 건너뜀)</summary><input type="file" id="csvFile" accept=".csv"> <span class="muted">영상도 함께 올려야 캡처가 표시됩니다 (fps·해상도는 CSV 기준으로 맞춥니다).</span></details>
   </div>
   ${S.video ? `<div class="card"><h3>수면선 · 거리 기준 지정 (첫 프레임 클릭)</h3>
-    <div class="tabs"><button data-mode="wl" class="${S.clickMode === "wl" ? "active" : ""}">수면선 (2점)</button><button data-mode="sc" class="${S.clickMode === "sc" ? "active" : ""}">거리 기준 (2점)</button><button data-mode="none" class="${S.clickMode === "none" ? "active" : ""}">클릭 안 함</button></div>
+    <div class="tabs"><button data-mode="wl" class="${S.clickMode === "wl" ? "active" : ""}">수면선 (2점)</button><button data-mode="sc" class="${S.clickMode === "sc" ? "active" : ""}">거리 기준 (2점)</button><button data-mode="roi" class="${S.clickMode === "roi" ? "active" : ""}">🔍 확대 영역 (2점)</button><button data-mode="none" class="${S.clickMode === "none" ? "active" : ""}">클릭 안 함</button></div>
+    <div class="info" style="margin:8px 0"><b>🎯 정밀 분석 팁</b> — 멀리서 다가왔다 멀어지는 영상은 <b>가까운 구간만</b> 고르고, 그 구간에서 수영자가 지나가는 자리를 <b>🔍 확대 영역</b>으로 지정하세요. 고른 구간은 <b>모든 프레임</b>을 높은 해상도로 분석합니다.</div>
+    <div class="card" style="padding:10px;margin:0 0 8px">
+      <b>⏱ 분석 구간</b> <span class="muted">${fmtSec(segStart())} ~ ${fmtSec(segEnd())} (${(segEnd() - segStart()).toFixed(1)}초)</span>
+      <input type="range" id="segScrub" min="0" max="${S.videoInfo.duration}" step="${(1 / S.videoInfo.fps).toFixed(4)}" value="${S.scrubT ?? segStart()}" style="width:100%">
+      <div class="row" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><span class="muted" id="scrubT">${fmtSec(S.scrubT ?? segStart())}</span>
+      <button class="btn small sec" id="stepBack">◀ 1프레임</button><button class="btn small sec" id="stepFwd">1프레임 ▶</button>
+      <button class="btn small" id="setStart">여기를 시작으로</button><button class="btn small" id="setEnd">여기를 끝으로</button><button class="btn small sec" id="segAll">전체 구간</button></div>
+      <label class="f" style="margin-top:6px">분석 해상도<select id="precision"><option value="960" ${S.settings.max_long_side <= 960 ? "selected" : ""}>보통 (960px, 빠름)</option><option value="1440" ${S.settings.max_long_side === 1440 ? "selected" : ""}>높음 (1440px)</option><option value="1920" ${S.settings.max_long_side >= 1920 ? "selected" : ""}>최고 (원본, 최대 1920px — 느림)</option></select></label>
+    </div>
     <div class="canvas-wrap"><canvas id="setupCanvas"></canvas></div>
+    <div class="muted">확대 영역: <b>${S.clicks.roi?.length === 2 ? "지정됨 ✅" : "없음 (화면 전체)"}</b> ${S.clicks.roi?.length ? '<button class="btn small sec" id="clearRoi">지우기</button>' : ""} — 수영자가 지나가는 자리를 왼쪽 위·오른쪽 아래 두 번 눌러 상자로 지정</div>
     <div class="grid" style="margin-top:8px"><div>수면선: <b>${S.clicks.wl.length === 2 ? "지정됨 ✅" : `${S.clicks.wl.length}/2 점 (미지정 시 화면 수평·위에서 30%)`}</b> <button class="btn small sec" id="clearWl">지우기</button></div>
     <div>거리 기준: <b>${S.clicks.sc.length === 2 ? "지정됨 ✅" : `${S.clicks.sc.length}/2 점`}</b> <label class="f" style="display:inline-flex">두 점 사이 실제 거리(m) <input type="number" step="0.5" min="0" data-k="scale_meters" value="${st.scale_meters ?? ""}" style="width:90px"></label> <button class="btn small sec" id="clearSc">지우기</button></div></div>
     <p style="margin-top:12px"><button class="btn" id="startBtn">🚀 분석 시작</button> <span class="muted">예상 시간: 영상 ${S.videoInfo.duration.toFixed(0)}초 × 프레임당 0.05~0.2초</span></p></div>` : ""}`;
@@ -136,24 +149,43 @@ function renderSetup() {
   app.querySelectorAll("[data-mode]").forEach(b => b.onclick = () => { S.clickMode = b.dataset.mode; render(); });
   $("#clearWl")?.addEventListener("click", () => { S.clicks.wl = []; render(); }); $("#clearSc")?.addEventListener("click", () => { S.clicks.sc = []; render(); });
   $("#startBtn")?.addEventListener("click", startAnalysis);
-  if (S.video) drawSetupCanvas();
+  if (S.video) {
+    const sc = $("#segScrub"); sc.oninput = () => { S.scrubT = +sc.value; $("#scrubT").textContent = fmtSec(S.scrubT); drawSetupCanvas(); };
+    const stepBy = (d) => { S.scrubT = Math.max(0, Math.min(S.videoInfo.duration, (S.scrubT ?? segStart()) + d / S.videoInfo.fps)); render(); };
+    $("#stepBack").onclick = () => stepBy(-1); $("#stepFwd").onclick = () => stepBy(1);
+    $("#setStart").onclick = () => { S.settings.seg_start = S.scrubT ?? 0; if (S.settings.seg_end != null && S.settings.seg_end <= S.settings.seg_start) S.settings.seg_end = null; render(); };
+    $("#setEnd").onclick = () => { const t = S.scrubT ?? S.videoInfo.duration; if (t > segStart()) S.settings.seg_end = t; render(); };
+    $("#segAll").onclick = () => { S.settings.seg_start = 0; S.settings.seg_end = null; render(); };
+    $("#precision").onchange = (e) => { S.settings.max_long_side = +e.target.value; render(); };
+    $("#clearRoi")?.addEventListener("click", () => { S.clicks.roi = []; render(); });
+    drawSetupCanvas();
+  }
 }
 async function onFile(file) {
-  try { S.file = file; S.video = await loadVideo(file); const fps = await estimateFps(S.video); S.videoInfo = { width: S.video.videoWidth, height: S.video.videoHeight, fps, duration: S.video.duration }; S.clicks = { wl: [], sc: [] }; S.importedLm = null; render(); }
+  try { S.file = file; S.video = await loadVideo(file); const fps = await estimateFps(S.video); S.videoInfo = { width: S.video.videoWidth, height: S.video.videoHeight, fps, duration: S.video.duration }; S.clicks = { wl: [], sc: [], roi: [] }; S.scrubT = 0; S.settings.seg_start = 0; S.settings.seg_end = null; S.importedLm = null; render(); }
   catch (e) { toast(e.message, 5000); }
 }
 async function onCsv(file) { const text = await file.text(); S.importedCsv = text; toast("CSV 를 읽었습니다. 분석 시작을 누르면 자세 추정 없이 지표만 계산합니다."); }
+function fmtSec(t) { return `${(t || 0).toFixed(2)}초`; }
+function segStart() { return S.settings.seg_start || 0; }
+function segEnd() { return S.settings.seg_end ?? S.videoInfo?.duration ?? 0; }
+let _drawTok = 0;
 async function drawSetupCanvas() {
-  const c = $("#setupCanvas"); if (!c) return; const { width, height } = analysisSize(S.video, S.settings.max_long_side); c.width = width; c.height = height; const ctx = c.getContext("2d");
-  await seekTo(S.video, 0); ctx.drawImage(S.video, 0, 0, width, height);
-  const draw = (pts, col) => { ctx.fillStyle = col; ctx.strokeStyle = col; ctx.lineWidth = 2; pts.forEach(p => { ctx.beginPath(); ctx.arc(p[0], p[1], 7, 0, Math.PI * 2); ctx.fill(); }); if (pts.length === 2) { ctx.beginPath(); ctx.moveTo(...pts[0]); ctx.lineTo(...pts[1]); ctx.stroke(); } };
+  const c = $("#setupCanvas"); if (!c) return; const tok = ++_drawTok; const { width, height } = analysisSize(S.video, S.settings.max_long_side); c.width = width; c.height = height; const ctx = c.getContext("2d");
+  await seekTo(S.video, S.scrubT ?? segStart()); if (tok !== _drawTok) return; ctx.drawImage(S.video, 0, 0, width, height);
+  const P = (q) => [q[0] * width, q[1] * height];
+  const draw = (pts, col) => { ctx.fillStyle = col; ctx.strokeStyle = col; ctx.lineWidth = 2; pts.map(P).forEach(p => { ctx.beginPath(); ctx.arc(p[0], p[1], 7, 0, Math.PI * 2); ctx.fill(); }); if (pts.length === 2) { ctx.beginPath(); ctx.moveTo(...P(pts[0])); ctx.lineTo(...P(pts[1])); ctx.stroke(); } };
   if (!S.clicks.wl.length) { ctx.strokeStyle = "rgba(255,255,255,.7)"; ctx.setLineDash([6, 6]); ctx.beginPath(); ctx.moveTo(0, 0.3 * height); ctx.lineTo(width, 0.3 * height); ctx.stroke(); ctx.setLineDash([]); }
   draw(S.clicks.wl, "#ffee00"); draw(S.clicks.sc, "#ff8c00");
-  c.onclick = (e) => { if (S.clickMode === "none") return; const r = c.getBoundingClientRect(); const x = (e.clientX - r.left) * c.width / r.width, y = (e.clientY - r.top) * c.height / r.height; const arr = S.clickMode === "wl" ? S.clicks.wl : S.clicks.sc; if (arr.length >= 2) arr.length = 0; arr.push([x, y]); render(); };
+  const roi = S.clicks.roi || []; if (roi.length) { ctx.fillStyle = "#00e5ff"; roi.map(P).forEach(p => { ctx.beginPath(); ctx.arc(p[0], p[1], 7, 0, Math.PI * 2); ctx.fill(); }); }
+  if (roi.length === 2) { const [a, b] = roi.map(P); ctx.strokeStyle = "#00e5ff"; ctx.lineWidth = 3; ctx.setLineDash([10, 6]); ctx.strokeRect(Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1])); ctx.setLineDash([]); }
+  c.onclick = (e) => { if (S.clickMode === "none") return; const r = c.getBoundingClientRect(); const x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height; const key = S.clickMode; const arr = (S.clicks[key] = S.clicks[key] || []); if (arr.length >= 2) arr.length = 0; arr.push([x, y]); render(); };
 }
 async function startAnalysis() {
-  const st = { ...S.settings }; st.waterline = S.clicks.wl.length === 2 ? S.clicks.wl.map(p => [...p]) : null; st.scale_points = S.clicks.sc.length === 2 && st.scale_meters > 0 ? S.clicks.sc.map(p => [...p]) : null; if (!st.scale_points) st.scale_meters = null;
-  const { width, height } = analysisSize(S.video, st.max_long_side);
+  const st = { ...S.settings }; const { width, height } = analysisSize(S.video, st.max_long_side); const P = (q) => [q[0] * width, q[1] * height];
+  st.waterline = S.clicks.wl.length === 2 ? S.clicks.wl.map(P) : null; st.scale_points = S.clicks.sc.length === 2 && st.scale_meters > 0 ? S.clicks.sc.map(P) : null; if (!st.scale_points) st.scale_meters = null;
+  const roi = S.clicks.roi || []; if (roi.length === 2) { const [a, b] = roi.map(P); const pad = 0.05; let x0 = Math.min(a[0], b[0]), y0 = Math.min(a[1], b[1]), w = Math.abs(a[0] - b[0]), h = Math.abs(a[1] - b[1]); x0 = Math.max(0, x0 - w * pad); y0 = Math.max(0, y0 - h * pad); w = Math.min(width - x0, w * (1 + 2 * pad)); h = Math.min(height - y0, h * (1 + 2 * pad)); st.roi = { x: x0, y: y0, w, h }; } else st.roi = null;
+  if (st.seg_start || st.seg_end) st.frame_step = 1;   // 구간을 고르면 모든 프레임 분석
   S.session = { id: db.newId(st.student_name), name: st.student_name, created: Date.now(), settings: st, videoInfo: { ...S.videoInfo, analysis: { width, height } }, lm: null, report: null, camera: null, poseInfo: null, review: { events: {}, joints: {}, comments: {}, extra: {} }, metrics: null, cycles: null };
   S.frameCache.clear(); S.runPending = true; go(1);
 }
@@ -184,7 +216,7 @@ async function runAnalysis() {
     } else {
       let variant = st.model;
       if (variant === "auto") {
-        const res = {}; for (const v of ["full", "lite"]) { const lmk = await getLandmarker(v); progress("모델 비교", v === "full" ? 0.2 : 0.6); res[v] = await trial(S.video, lmk, { fps: s.videoInfo.fps, seconds: 3, step: 2, maxLong: st.max_long_side, underwater: under }); log(`${v}: 검출률 ${(res[v].detect_rate * 100).toFixed(0)}%, 신뢰도 ${(res[v].mean_visibility * 100).toFixed(0)}점, ${res[v].ms_per_frame.toFixed(0)}ms/프레임`); }
+        const res = {}; for (const v of ["full", "lite"]) { const lmk = await getLandmarker(v); progress("모델 비교", v === "full" ? 0.2 : 0.6); res[v] = await trial(S.video, lmk, { fps: s.videoInfo.fps, seconds: 3, step: 2, maxLong: st.max_long_side, underwater: under, start: st.seg_start || 0, end: st.seg_end ?? null, roi: st.roi || null }); log(`${v}: 검출률 ${(res[v].detect_rate * 100).toFixed(0)}%, 신뢰도 ${(res[v].mean_visibility * 100).toFixed(0)}점, ${res[v].ms_per_frame.toFixed(0)}ms/프레임`); }
         variant = (Math.round(res.full.detect_rate * 10) > Math.round(res.lite.detect_rate * 10) || res.full.mean_visibility >= res.lite.mean_visibility - 0.03) ? "full" : "lite"; log(`→ 선택: ${variant}`); s.poseInfo = { trials: res };
       }
       if (s.partial?.variant) variant = s.partial.variant;
@@ -192,8 +224,9 @@ async function runAnalysis() {
       const lmk = await getLandmarker(variant);
       const resume = s.partial.lm ? { lm: Landmarks.fromJSON(s.partial.lm), k: s.partial.k, camMags: s.partial.camMags } : null;
       if (resume) log(`이어서 분석: ${resume.k}프레임까지 완료된 상태에서 계속합니다`);
-      log(`자세 추정 시작: ${s.videoInfo.analysis.width}x${s.videoInfo.analysis.height}, ${s.videoInfo.fps}fps, ${Math.floor(s.videoInfo.duration * s.videoInfo.fps)}프레임${st.frame_step > 1 ? ` (${st.frame_step}프레임 중 1)` : ""}`);
-      const out = await extractLandmarks(S.video, lmk, { fps: s.videoInfo.fps, step: st.frame_step, maxLong: st.max_long_side, underwater: under, cameraCfg: S.configs.thresholds.camera_motion, onProgress: (i, n, ms) => progress("자세 추정", i / n, `(${ms.toFixed(0)} ms/프레임, 남은 시간 약 ${Math.ceil((n - i) * ms / 1000)}초)`), shouldStop: () => S.stop,
+      log(`자세 추정 시작: ${s.videoInfo.analysis.width}x${s.videoInfo.analysis.height}, ${s.videoInfo.fps}fps, 구간 ${fmtSec(st.seg_start || 0)}~${fmtSec(st.seg_end ?? s.videoInfo.duration)}${st.frame_step > 1 ? ` (${st.frame_step}프레임 중 1)` : " (모든 프레임)"}${st.roi ? `, 확대 영역 ${Math.round(st.roi.w)}x${Math.round(st.roi.h)} → 최대 4배 확대` : ""}`);
+      const out = await extractLandmarks(S.video, lmk, { fps: s.videoInfo.fps, step: st.frame_step, maxLong: st.max_long_side, underwater: under, cameraCfg: S.configs.thresholds.camera_motion, start: st.seg_start || 0, end: st.seg_end ?? null, roi: st.roi || null,
+        onProgress: (i, n, ms) => progress("자세 추정", i / n, `(${ms.toFixed(0)} ms/프레임, 남은 시간 약 ${Math.ceil((n - i) * ms / 1000)}초)`), shouldStop: () => S.stop,
         resume, checkpointEvery: 30,
         onCheckpoint: async (lmPart, k, camMags) => { s.partial = { variant, k, n: lmPart.n, lm: lmPart.toJSON(), camMags }; try { await db.saveSession({ ...(await db.getSession(s.id)), partial: s.partial }); } catch (e) { console.warn(e); } },
         onPause: (paused) => { log(paused ? "⏸ 화면이 꺼지거나 다른 앱으로 이동해 일시정지했습니다. 돌아오면 이어서 진행합니다." : "▶ 다시 진행합니다"); if (!paused) keepAwake(); } });
@@ -216,7 +249,7 @@ window.addEventListener("beforeunload", (e) => { if (S.running) { e.preventDefau
 
 function recompute() {
   const s = S.session; const out = analyze({ lm: s.lm, report: s.report, settings: s.settings, configs: S.configs, review: s.review, cameraMotion: s.camera, log });
-  s.metrics = out.results; s.cycles = out.cycles; s.camera = out.camera; s.hasMetrics = true;
+  s.lmView = out.lm; s.metrics = out.results; s.cycles = out.cycles; s.camera = out.camera; s.hasMetrics = true;
 }
 function showRunResult() {
   const s = S.session; const p = s.poseInfo || {}; const el = $("#runResult"); if (!el) return; updateNav();
@@ -230,7 +263,7 @@ function showRunResult() {
 }
 function setupPlayer(player, canvas) {
   const s = S.session; player.src = S.video.src; player.muted = true; const { width, height } = s.videoInfo.analysis; canvas.width = width; canvas.height = height; const ctx = canvas.getContext("2d");
-  const drawAt = (t) => { ctx.clearRect(0, 0, width, height); const i = Math.max(0, Math.min(s.lm.n - 1, Math.round(t * s.lm.fps))); drawSkeleton(ctx, s.lm, i, { lineWidth: 3 }); };
+  const drawAt = (t) => { ctx.clearRect(0, 0, width, height); const L = viewLm(); const i = Math.max(0, Math.min(L.n - 1, L.indexOfFrame(Math.round(t * s.videoInfo.fps)))); drawSkeleton(ctx, L, i, { lineWidth: 3 }); };
   if ("requestVideoFrameCallback" in player) { const loop = (now, meta) => { drawAt(meta.mediaTime); player.requestVideoFrameCallback(loop); }; player.requestVideoFrameCallback(loop); } else player.addEventListener("timeupdate", () => drawAt(player.currentTime));
   player.addEventListener("seeked", () => drawAt(player.currentTime)); player.addEventListener("loadeddata", () => drawAt(0));
 }
@@ -265,7 +298,7 @@ async function renderEvents(k, r) {
   if (!S.video) return;
   for (const ev of r.events) { if (token !== S.renderToken) return; const card = el.querySelector(`[data-ev="${CSS.escape(ev.id)}"] .thumb`); if (!card) continue; try { const angle = (ev.kind === "catch_end" || ev.kind === "knee_min") && ev.joints.length === 3 ? { joints: ev.joints, value: angleValue(ev) } : null; const url = await captureURL({ frame: ev.frame, label: ev.label, highlight: ev.joints, angle }, 420); card.outerHTML = `<img src="${url}" alt="">`; } catch (e) { card.textContent = "캡처 실패"; } }
 }
-function angleValue(ev) { const lm = S.session.lm, i = lm.indexOfFrame(ev.frame); const [a, b, c] = ev.joints.map(j => lm.data[j]); const v1x = a.x[i] - b.x[i], v1y = a.y[i] - b.y[i], v2x = c.x[i] - b.x[i], v2y = c.y[i] - b.y[i]; const n = Math.hypot(v1x, v1y) * Math.hypot(v2x, v2y); return n ? Math.acos(Math.max(-1, Math.min(1, (v1x * v2x + v1y * v2y) / n))) * 180 / Math.PI : null; }
+function angleValue(ev) { const lm = viewLm(), i = lm.indexOfFrame(ev.frame); const [a, b, c] = ev.joints.map(j => lm.data[j]); const v1x = a.x[i] - b.x[i], v1y = a.y[i] - b.y[i], v2x = c.x[i] - b.x[i], v2y = c.y[i] - b.y[i]; const n = Math.hypot(v1x, v1y) * Math.hypot(v2x, v2y); return n ? Math.acos(Math.max(-1, Math.min(1, (v1x * v2x + v1y * v2y) / n))) * 180 / Math.PI : null; }
 function onEventButton(k, ev, d) {
   const s = S.session; const evs = (s.review.events[k] = s.review.events[k] || {});
   if (d === "edit") { S.editFrame = ev.frame; S.editJoint = EDITABLE_JOINTS.includes(ev.joints[1]) ? ev.joints[1] : EDITABLE_JOINTS.includes(ev.joints[0]) ? ev.joints[0] : S.editJoint; render(); setTimeout(() => $("#jointPanel")?.scrollIntoView({ behavior: "smooth" }), 50); return; }
@@ -273,16 +306,45 @@ function onEventButton(k, ev, d) {
   S.recomputeStamp = Date.now(); recompute(); persist(); render();
 }
 async function renderJointPanel() {
-  const s = S.session, f = S.editFrame, lm = s.lm, i = lm.indexOfFrame(f); const el = $("#jointPanel");
-  el.innerHTML = `<div class="joint-edit"><h3>관절 위치 수정 — 프레임 ${f}</h3><p class="muted">관절을 고른 뒤 영상에서 올바른 위치를 누르세요. 바로 재계산됩니다.</p>
-  <div class="grid"><label class="f">수정할 관절<select id="jointSel">${EDITABLE_JOINTS.map(j => `<option value="${j}" ${j === S.editJoint ? "selected" : ""}>${KO_NAMES[j] || j} (${j})</option>`).join("")}</select></label><div><button class="btn small sec" id="resetJoints">이 프레임 수정 전부 되돌리기</button> <button class="btn small sec" id="closeEdit">닫기</button></div></div>
-  <div class="canvas-wrap" style="margin-top:8px"><canvas id="editCanvas"></canvas></div><div class="muted" id="editList"></div></div>`;
-  $("#jointSel").onchange = e => { S.editJoint = e.target.value; drawEdit(); }; $("#closeEdit").onclick = () => { S.editFrame = null; render(); };
-  $("#resetJoints").onclick = () => { delete s.review.joints[String(f)]; S.recomputeStamp = Date.now(); recompute(); persist(); S.frameCache.delete(f); render(); };
-  const c = $("#editCanvas"); const fc = S.video ? await grabFrame(lm.frame[i]) : null; c.width = lm.width; c.height = lm.height;
-  const drawEdit = () => { const ctx = c.getContext("2d"); ctx.clearRect(0, 0, c.width, c.height); if (fc) ctx.drawImage(fc, 0, 0); else { ctx.fillStyle = "#223"; ctx.fillRect(0, 0, c.width, c.height); } drawSkeleton(ctx, lm, i, { highlight: [S.editJoint], lineWidth: 3 }); const edits = s.review.joints[String(f)] || {}; $("#editList").textContent = Object.keys(edits).length ? "이 프레임 수정 내역: " + Object.entries(edits).map(([j, [x, y]]) => `${KO_NAMES[j] || j} → (${x.toFixed(0)}, ${y.toFixed(0)})`).join(", ") : ""; };
-  drawEdit();
-  c.onclick = (e) => { const r = c.getBoundingClientRect(); const x = (e.clientX - r.left) * c.width / r.width, y = (e.clientY - r.top) * c.height / r.height; (s.review.joints[String(f)] = s.review.joints[String(f)] || {})[S.editJoint] = [x, y]; S.recomputeStamp = Date.now(); recompute(); persist(); S.frameCache.delete(f); render(); setTimeout(() => $("#jointPanel")?.scrollIntoView(), 30); };
+  const s = S.session, f = S.editFrame; const el = $("#jointPanel"); if (!el) return;
+  el.innerHTML = `<div class="joint-edit"><h3>관절 위치 수정 — 프레임 ${f}</h3><p class="muted">점을 <b>손가락(마우스)으로 끌어서</b> 옮기세요. 놓는 순간 저장되고 지표가 다시 계산됩니다. 빈 곳을 누르면 아래에서 고른 관절이 그 자리로 옵니다.</p>
+  <div class="grid"><label class="f">빈 곳 누를 때 옮길 관절<select id="jointSel">${EDITABLE_JOINTS.map(j => `<option value="${j}" ${j === S.editJoint ? "selected" : ""}>${KO_NAMES[j] || j}</option>`).join("")}</select></label>
+  <div><button class="btn small sec" id="prevF">◀ 이전 프레임</button> <button class="btn small sec" id="nextF">다음 프레임 ▶</button></div>
+  <div><button class="btn small sec" id="resetJoints">이 프레임 수정 되돌리기</button> <button class="btn small" id="closeEdit">완료</button></div></div>
+  <div class="canvas-wrap" style="margin-top:8px"><canvas id="editCanvas" style="touch-action:none;cursor:crosshair"></canvas></div><div class="muted" id="editList"></div><div id="editMetric" class="info" hidden></div></div>`;
+  $("#jointSel").onchange = e => { S.editJoint = e.target.value; draw(); };
+  $("#closeEdit").onclick = () => { S.editFrame = null; render(); };
+  $("#resetJoints").onclick = () => { delete s.review.joints[String(f)]; afterEdit(); };
+  const step = () => { const L = viewLm(); const i = L.indexOfFrame(S.editFrame); return { L, i }; };
+  $("#prevF").onclick = () => { const { L, i } = step(); if (i > 0) { S.editFrame = L.frame[i - 1]; renderJointPanel(); } };
+  $("#nextF").onclick = () => { const { L, i } = step(); if (i < L.n - 1) { S.editFrame = L.frame[i + 1]; renderJointPanel(); } };
+  const c = $("#editCanvas"); const L0 = viewLm(); const i0 = L0.indexOfFrame(f); const fc = S.video ? await grabFrame(L0.frame[i0]) : null;
+  // 사람 주변을 확대해서 보여 줌 (작은 점도 잡기 쉽게)
+  const box = (await import("./viz/draw.js")).personBox(L0, i0, 0.45, 200) || { x: 0, y: 0, w: L0.width, h: L0.height };
+  const scale = Math.min(1600 / box.w, 3); c.width = Math.round(box.w * scale); c.height = Math.round(box.h * scale);
+  let drag = null;
+  function draw() {
+    const L = viewLm(), i = L.indexOfFrame(f); const ctx = c.getContext("2d"); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, c.width, c.height);
+    if (fc) ctx.drawImage(fc, box.x, box.y, box.w, box.h, 0, 0, c.width, c.height); else { ctx.fillStyle = "#223"; ctx.fillRect(0, 0, c.width, c.height); }
+    ctx.save(); ctx.translate(-box.x * scale, -box.y * scale); drawSkeleton(ctx, L, i, { highlight: [S.editJoint, drag?.j].filter(Boolean), lineWidth: 3, scale, minVis: 0 }); ctx.restore();
+    if (drag) { ctx.fillStyle = "#ff2020"; ctx.beginPath(); ctx.arc((drag.x - box.x) * scale, (drag.y - box.y) * scale, 10, 0, Math.PI * 2); ctx.fill(); }
+    const edits = s.review.joints[String(f)] || {}; $("#editList").textContent = Object.keys(edits).length ? "수정됨: " + Object.keys(edits).map(j => KO_NAMES[j] || j).join(", ") : "아직 수정 없음";
+  }
+  const toImg = (e) => { const r = c.getBoundingClientRect(); return [box.x + (e.clientX - r.left) * c.width / r.width / scale, box.y + (e.clientY - r.top) * c.height / r.height / scale]; };
+  c.onpointerdown = (e) => {
+    const [x, y] = toImg(e); const L = viewLm(), i = L.indexOfFrame(f); let best = null, bd = Infinity;
+    for (const j of EDITABLE_JOINTS) { const jx = L.data[j].x[i], jy = L.data[j].y[i]; if (Number.isNaN(jx)) continue; const d = Math.hypot(jx - x, jy - y) * scale; if (d < bd) { bd = d; best = j; } }
+    const grab = bd < 40 ? best : S.editJoint; drag = { j: grab, x, y }; S.editJoint = grab; $("#jointSel").value = grab; c.setPointerCapture(e.pointerId); draw();
+  };
+  c.onpointermove = (e) => { if (!drag) return; const [x, y] = toImg(e); drag.x = x; drag.y = y; draw(); };
+  c.onpointerup = (e) => { if (!drag) return; (s.review.joints[String(f)] = s.review.joints[String(f)] || {})[drag.j] = [drag.x, drag.y]; drag = null; afterEdit(); };
+  function afterEdit() {
+    const before = JSON.stringify(Object.values(s.metrics).map(r => [r.key, r.summary?.mean ?? r.summary?.knee_mean ?? r.summary?.sink_angle_mean ?? null]));
+    S.recomputeStamp = Date.now(); recompute(); persist(); draw();
+    const k = Object.keys(s.metrics)[S.tab], r = s.metrics[k]; const m = $("#editMetric");
+    m.hidden = false; m.innerHTML = `저장했습니다. <b>${esc(r.name)}</b>: ${esc(fmtTraffic(r.traffic))}` + (r.summary?.mean != null ? ` · 평균 ${r.summary.mean.toFixed(1)}°` : r.summary?.knee_mean != null ? ` · 무릎 ${r.summary.knee_mean.toFixed(1)}°` : r.summary?.sink_angle_mean != null ? ` · ${r.summary.sink_angle_mean.toFixed(1)}°` : "") + ` <span class="muted">(위쪽 수치·썸네일은 '완료'를 누르면 갱신)</span>`;
+  }
+  draw();
 }
 
 // ------------------------------------------------------------ ④ 리포트
@@ -300,7 +362,7 @@ function renderReport() {
   const saveExtra = () => { ex.top3 = [0, 1, 2].map(i => ({ title: $(`[data-top="${i}"][data-f="title"]`).value, detail: $(`[data-top="${i}"][data-f="detail"]`).value })); ex.drills = $("#drills").value.split("\n").map(x => x.trim()).filter(Boolean); ex.closing = $("#closing").value; persist(); };
   app.querySelectorAll("input,textarea").forEach(el => el.addEventListener("change", saveExtra));
   $("#pdfBtn").onclick = async () => { saveExtra(); const b = $("#pdfBtn"); b.disabled = true; try { await makePdf(); } catch (e) { console.error(e); toast("PDF 생성 실패: " + e.message, 6000); } finally { b.disabled = false; } };
-  $("#dlCsv").onclick = () => download(new Blob([s.lm.toCSV()], { type: "text/csv" }), `${s.id}_landmarks.csv`);
+  $("#dlCsv").onclick = () => download(new Blob([viewLm().toCSV()], { type: "text/csv" }), `${s.id}_landmarks.csv`);
   $("#dlJson").onclick = () => download(new Blob([JSON.stringify({ settings: s.settings, cycles: s.cycles, camera_motion: s.camera, metrics: s.metrics }, null, 1)], { type: "application/json" }), `${s.id}_metrics.json`);
   $("#dlOverlay")?.addEventListener("click", makeOverlayVideo);
 }
@@ -318,19 +380,20 @@ async function makeOverlayVideo() {
   const s = S.session, st = $("#ovStatus"); if (!("MediaRecorder" in window)) return toast("이 브라우저는 영상 녹화를 지원하지 않습니다");
   const { width, height } = s.videoInfo.analysis; const c = document.createElement("canvas"); c.width = width; c.height = height; const ctx = c.getContext("2d");
   const stream = c.captureStream(0); const track = stream.getVideoTracks()[0]; const rec = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported("video/webm;codecs=vp9") ? "video/webm;codecs=vp9" : "video/webm" }); const chunks = []; rec.ondataavailable = e => chunks.push(e.data); rec.start();
-  const fps = s.videoInfo.fps; const n = s.lm.n;
-  for (let i = 0; i < n; i++) { await seekTo(S.video, s.lm.frame[i] / fps); ctx.drawImage(S.video, 0, 0, width, height); drawSkeleton(ctx, s.lm, i, { lineWidth: 3 }); ctx.fillStyle = "rgba(0,0,0,.6)"; ctx.fillRect(6, 6, 150, 24); ctx.fillStyle = "#fff"; ctx.font = "16px sans-serif"; ctx.fillText(`${s.lm.frame[i]}  ${(s.lm.t_ms[i] / 1000).toFixed(2)}s`, 10, 24); track.requestFrame && track.requestFrame(); await new Promise(r => setTimeout(r, 1000 / fps)); if (i % 15 === 0) st.textContent = `오버레이 영상 ${Math.round(i / n * 100)}%`; }
+  const fps = s.videoInfo.fps; const L = viewLm(); const n = L.n;
+  for (let i = 0; i < n; i++) { await seekTo(S.video, L.frame[i] / fps); ctx.drawImage(S.video, 0, 0, width, height); drawSkeleton(ctx, L, i, { lineWidth: 3 }); ctx.fillStyle = "rgba(0,0,0,.6)"; ctx.fillRect(6, 6, 150, 24); ctx.fillStyle = "#fff"; ctx.font = "16px sans-serif"; ctx.fillText(`${L.frame[i]}  ${(L.t_ms[i] / 1000).toFixed(2)}s`, 10, 24); track.requestFrame && track.requestFrame(); await new Promise(r => setTimeout(r, 1000 / fps)); if (i % 15 === 0) st.textContent = `오버레이 영상 ${Math.round(i / n * 100)}%`; }
   rec.stop(); await new Promise(r => rec.onstop = r); download(new Blob(chunks, { type: "video/webm" }), `${s.id}_overlay.webm`); st.textContent = "완료";
 }
 
 // ------------------------------------------------------------ 라우팅/부팅
-function updateNav() { document.querySelectorAll("#nav button").forEach(b => { b.classList.toggle("active", +b.dataset.step === S.step); b.disabled = (+b.dataset.step >= 2 && !S.session?.metrics) || (+b.dataset.step === 1 && !S.session); }); }
+function updateNav() { document.querySelectorAll("#nav button").forEach(b => { const k = +b.dataset.step; b.classList.toggle("active", k === S.step); b.disabled = k === 4 ? false : (k >= 2 && !S.session?.metrics) || (k === 1 && !S.session); }); }
 function render() {
   updateNav();
-  [renderSetup, renderRun, renderReview, renderReport][S.step]();
+  [renderSetup, renderRun, renderReview, renderReport, renderPhoto][S.step]();
 }
 async function boot() {
   try { S.configs = await loadConfigs(); } catch (e) { app.innerHTML = `<div class="err">설정 파일을 불러오지 못했습니다: ${esc(e.message)}</div>`; return; }
+  initPhoto({ app, $, esc, toast, configs: S.configs, download, loadFonts, STROKES, VIEWS, CAMERA_MODES });
   document.querySelectorAll("#nav button").forEach(b => b.onclick = () => go(+b.dataset.step));
   app.addEventListener("change", e => { const t = e.target; if (t.id === "file" && t.files?.[0]) onFile(t.files[0]); else if (t.id === "csvFile" && t.files?.[0]) onCsv(t.files[0]); });
   $("#menuBtn").onclick = () => { $("#drawer").hidden = false; renderDrawer(); }; $("#drawerClose").onclick = () => $("#drawer").hidden = true;

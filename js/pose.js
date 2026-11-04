@@ -16,15 +16,31 @@ export async function createLandmarker({ variant = "full", delegate = "GPU", bas
   try { const lm = await make(delegate); lm._delegate = delegate; return lm; }
   catch (e) { console.warn("GPU delegate 실패 → CPU", e); const lm = await make("CPU"); lm._delegate = "CPU"; return lm; }
 }
+/** 확대 영역(roi, 분석 좌표계 {x,y,w,h})을 잘라 MediaPipe 입력 캔버스를 만든다. 반환: 좌표 변환 함수 */
+function makeInput(video, width, height, roi) {
+  const canvas = document.createElement("canvas"); let map;
+  if (roi && roi.w > 10 && roi.h > 10) {
+    const k = Math.min(4, 960 / Math.max(roi.w, roi.h)); canvas.width = Math.max(64, Math.round(roi.w * k)); canvas.height = Math.max(64, Math.round(roi.h * k));
+    const sx = video.videoWidth / width, sy = video.videoHeight / height;
+    const draw = (ctx) => ctx.drawImage(video, roi.x * sx, roi.y * sy, roi.w * sx, roi.h * sy, 0, 0, canvas.width, canvas.height);
+    map = (p) => [roi.x + p.x * roi.w, roi.y + p.y * roi.h]; return { canvas, draw, map };
+  }
+  canvas.width = width; canvas.height = height;
+  return { canvas, draw: (ctx) => ctx.drawImage(video, 0, 0, width, height), map: (p) => [p.x * width, p.y * height] };
+}
+export function frameRange(duration, fps, step, start = 0, end = null) {
+  const nFrames = Math.floor(duration * fps); const a = Math.max(0, Math.round((start || 0) * fps)); const b = Math.min(nFrames, end ? Math.ceil(end * fps) : nFrames);
+  const idx = []; for (let f = a; f < b; f += step) idx.push(f); return idx;
+}
 /**
  * 영상 전체를 프레임 단위로 돌며 랜드마크 추출.
  * opts: {fps, step, maxLong, underwater, cameraCfg, onProgress(i,total,msPerFrame), shouldStop()}
  */
 export async function extractLandmarks(video, landmarker, opts) {
-  const { fps, step = 1, maxLong = 960, underwater = false, onProgress = () => {}, shouldStop = () => false, cameraCfg = {}, resume = null, onCheckpoint = null, checkpointEvery = 30, onPause = () => {} } = opts;
+  const { fps, step = 1, maxLong = 960, underwater = false, onProgress = () => {}, shouldStop = () => false, cameraCfg = {}, resume = null, onCheckpoint = null, checkpointEvery = 30, onPause = () => {}, start = 0, end = null, roi = null } = opts;
   const { width, height } = analysisSize(video, maxLong);
-  const canvas = document.createElement("canvas"); canvas.width = width; canvas.height = height; const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  const nFrames = Math.floor(video.duration * fps); const idx = []; for (let f = 0; f < nFrames; f += step) idx.push(f);
+  const inp = makeInput(video, width, height, roi); const canvas = inp.canvas; const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  const idx = frameRange(video.duration, fps, step, start, end);
   const lm = new Landmarks(idx.length, fps / step, width, height);
   for (let k = 0; k < idx.length; k++) { lm.frame[k] = idx[k]; lm.t_ms[k] = idx[k] / fps * 1000; }
   let startK = 0;
@@ -42,17 +58,17 @@ export async function extractLandmarks(video, landmarker, opts) {
       onPause(false); cam.prev = null;
     }
     const f = idx[k], t = f / fps; await seekTo(video, Math.min(t, Math.max(0, video.duration - 0.001)));
-    ctx.drawImage(video, 0, 0, width, height); if (underwater) underwaterEnhance(ctx, width, height);
+    inp.draw(ctx); if (underwater) underwaterEnhance(ctx, canvas.width, canvas.height);
     let ts = tsBase + Math.round(t * 1000); if (ts <= lastTs) ts = lastTs + 1; lastTs = ts; landmarker._lastTs = ts;
     const res = landmarker.detectForVideo(canvas, ts);
     lm.frame[k] = f; lm.t_ms[k] = t * 1000;
     let bbox = null;
     if (res.landmarks && res.landmarks[0]) {
       let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-      res.landmarks[0].slice(0, JOINTS.length).forEach((p, i) => { const vis = Math.min(p.visibility ?? 1, p.presence ?? 1); const x = p.x * width, y = p.y * height; lm.set(k, JOINTS[i], x, y, vis); if (vis > 0.3) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); } });
+      res.landmarks[0].slice(0, JOINTS.length).forEach((p, i) => { const vis = Math.min(p.visibility ?? 1, p.presence ?? 1); const [x, y] = inp.map(p); lm.set(k, JOINTS[i], x, y, vis); if (vis > 0.3) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); } });
       if (x0 < Infinity) { const s = camW / width, mx = (x1 - x0) * 0.25 + 20, my = (y1 - y0) * 0.25 + 20; bbox = [(x0 - mx) * s, (y0 - my) * s, (x1 + mx) * s, (y1 + my) * s]; }
     }
-    if (k % camStep === 0) { camCtx.drawImage(canvas, 0, 0, camW, camH); cam.push(toGray(camCtx, camW, camH), camH, bbox); }
+    if (k % camStep === 0) { camCtx.drawImage(video, 0, 0, camW, camH); cam.push(toGray(camCtx, camW, camH), camH, bbox); }
     done++;
     if (k % 5 === 0 || k === idx.length - 1) onProgress(k + 1, idx.length, (performance.now() - t0) / done);
     if (onCheckpoint && (k + 1) % checkpointEvery === 0) await onCheckpoint(lm, k + 1, cam.mags);
@@ -62,9 +78,24 @@ export async function extractLandmarks(video, landmarker, opts) {
   return { lm, camera, width, height, msPerFrame: (performance.now() - t0) / Math.max(1, done), resumedFrom: startK };
 }
 /** 앞 N초를 돌려 검출률·신뢰도·속도 측정 (모델 추천용) */
-export async function trial(video, landmarker, { fps, seconds = 3, step = 2, maxLong = 960, underwater = false }) {
-  const { width, height } = analysisSize(video, maxLong); const canvas = document.createElement("canvas"); canvas.width = width; canvas.height = height; const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  const n = Math.min(Math.floor(seconds * fps), Math.floor(video.duration * fps)); let det = 0, vis = 0, cnt = 0; const t0 = performance.now(); let lastTs = landmarker._lastTs ?? -1; const tsBase = lastTs + 1;
-  for (let f = 0; f < n; f += step) { await seekTo(video, f / fps); ctx.drawImage(video, 0, 0, width, height); if (underwater) underwaterEnhance(ctx, width, height); let ts = tsBase + Math.round(f / fps * 1000); if (ts <= lastTs) ts = lastTs + 1; lastTs = ts; landmarker._lastTs = ts; const res = landmarker.detectForVideo(canvas, ts); cnt++; if (res.landmarks && res.landmarks[0]) { det++; const core = [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]; vis += core.reduce((s, i) => s + Math.min(res.landmarks[0][i].visibility ?? 1, res.landmarks[0][i].presence ?? 1), 0) / core.length; } }
+export async function trial(video, landmarker, { fps, seconds = 3, step = 2, maxLong = 960, underwater = false, start = 0, end = null, roi = null }) {
+  const { width, height } = analysisSize(video, maxLong); const inp = makeInput(video, width, height, roi); const canvas = inp.canvas; const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  const frames = frameRange(video.duration, fps, step, start, Math.min(end ?? Infinity, (start || 0) + seconds)); let det = 0, vis = 0, cnt = 0; const t0 = performance.now(); let lastTs = landmarker._lastTs ?? -1; const tsBase = lastTs + 1;
+  for (const f of frames) { await seekTo(video, f / fps); inp.draw(ctx); if (underwater) underwaterEnhance(ctx, canvas.width, canvas.height); let ts = tsBase + Math.round(f / fps * 1000); if (ts <= lastTs) ts = lastTs + 1; lastTs = ts; landmarker._lastTs = ts; const res = landmarker.detectForVideo(canvas, ts); cnt++; if (res.landmarks && res.landmarks[0]) { det++; const core = [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]; vis += core.reduce((s, i) => s + Math.min(res.landmarks[0][i].visibility ?? 1, res.landmarks[0][i].presence ?? 1), 0) / core.length; } }
   return { detect_rate: cnt ? det / cnt : 0, mean_visibility: det ? vis / det : 0, ms_per_frame: (performance.now() - t0) / Math.max(1, cnt), frames: cnt };
+}
+
+/** 사진용 (IMAGE 모드) 랜드마커 */
+let imgLmk = null, imgVariant = null;
+export async function createImageLandmarker(variant = "heavy") {
+  if (imgLmk && imgVariant === variant) return imgLmk;
+  const vision = await loadVision(); const fileset = await vision.FilesetResolver.forVisionTasks(VENDOR + "mediapipe/wasm");
+  const make = (dl) => vision.PoseLandmarker.createFromOptions(fileset, { baseOptions: { modelAssetPath: `${VENDOR}models/pose_landmarker_${variant}.task`, delegate: dl }, runningMode: "IMAGE", numPoses: 1, minPoseDetectionConfidence: 0.3, minPosePresenceConfidence: 0.3 });
+  try { imgLmk = await make("GPU"); } catch { imgLmk = await make("CPU"); }
+  imgVariant = variant; return imgLmk;
+}
+/** canvas 한 장 → (33,3) 배열 [x, y, vis] (canvas 픽셀 좌표). 검출 실패 시 null */
+export function detectImage(lmk, canvas) {
+  const res = lmk.detect(canvas); if (!res.landmarks || !res.landmarks[0]) return null;
+  return res.landmarks[0].slice(0, JOINTS.length).map(p => [p.x * canvas.width, p.y * canvas.height, Math.min(p.visibility ?? 1, p.presence ?? 1)]);
 }

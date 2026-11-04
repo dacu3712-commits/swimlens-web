@@ -3,7 +3,7 @@ import { armEvents } from "./common.js";
 import { angleAt, nanargmax, meanOf } from "../signal/geometry.js";
 export const key = "streamline", name = "유선형 유지력";
 function headCenter(wl, i) { const e = meanOf([[wl.fwd("left_ear")[i], wl.depth("left_ear")[i]], [wl.fwd("right_ear")[i], wl.depth("right_ear")[i]]]); return Number.isNaN(e[0]) ? [wl.fwd("nose")[i], wl.depth("nose")[i]] : e; }
-function bodyLineAngle(h, p, a) {   // 세 점의 주축 각도(°), 머리→발 방향으로 깊이가 늘면 +
+export function bodyLineAngle(h, p, a) {   // 세 점의 주축 각도(°), 머리→발 방향으로 깊이가 늘면 +
   if ([h, p, a].some(q => Number.isNaN(q[0]) || Number.isNaN(q[1]))) return NaN;
   const mx = (h[0] + p[0] + a[0]) / 3, my = (h[1] + p[1] + a[1]) / 3; let sxx = 0, sxy = 0, syy = 0;
   for (const q of [h, p, a]) { const dx = q[0] - mx, dy = q[1] - my; sxx += dx * dx; sxy += dx * dy; syy += dy * dy; }
