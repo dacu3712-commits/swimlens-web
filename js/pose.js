@@ -21,15 +21,26 @@ export async function createLandmarker({ variant = "full", delegate = "GPU", bas
  * opts: {fps, step, maxLong, underwater, cameraCfg, onProgress(i,total,msPerFrame), shouldStop()}
  */
 export async function extractLandmarks(video, landmarker, opts) {
-  const { fps, step = 1, maxLong = 960, underwater = false, onProgress = () => {}, shouldStop = () => false, cameraCfg = {} } = opts;
+  const { fps, step = 1, maxLong = 960, underwater = false, onProgress = () => {}, shouldStop = () => false, cameraCfg = {}, resume = null, onCheckpoint = null, checkpointEvery = 30, onPause = () => {} } = opts;
   const { width, height } = analysisSize(video, maxLong);
   const canvas = document.createElement("canvas"); canvas.width = width; canvas.height = height; const ctx = canvas.getContext("2d", { willReadFrequently: true });
   const nFrames = Math.floor(video.duration * fps); const idx = []; for (let f = 0; f < nFrames; f += step) idx.push(f);
   const lm = new Landmarks(idx.length, fps / step, width, height);
-  const cam = new CameraMotionDetector(96, 3); const camW = 96, camH = Math.max(8, Math.round(height * 96 / width)); const camCanvas = document.createElement("canvas"); camCanvas.width = camW; camCanvas.height = camH; const camCtx = camCanvas.getContext("2d", { willReadFreq: true });
+  for (let k = 0; k < idx.length; k++) { lm.frame[k] = idx[k]; lm.t_ms[k] = idx[k] / fps * 1000; }
+  let startK = 0;
+  if (resume && resume.lm && resume.lm.n === idx.length) {      // 중단된 지점부터 이어서
+    for (const j of JOINTS) { lm.data[j].x.set(resume.lm.data[j].x); lm.data[j].y.set(resume.lm.data[j].y); lm.data[j].v.set(resume.lm.data[j].v); }
+    startK = Math.max(0, Math.min(idx.length, resume.k || 0));
+  }
+  const cam = new CameraMotionDetector(96, 3); if (resume?.camMags) cam.mags = [...resume.camMags]; const camW = 96, camH = Math.max(8, Math.round(height * 96 / width)); const camCanvas = document.createElement("canvas"); camCanvas.width = camW; camCanvas.height = camH; const camCtx = camCanvas.getContext("2d", { willReadFreq: true });
   const camStep = 3; const t0 = performance.now(); let lastTs = landmarker._lastTs ?? -1; const tsBase = lastTs + 1;
-  for (let k = 0; k < idx.length; k++) {
+  let done = 0;
+  for (let k = startK; k < idx.length; k++) {
     if (shouldStop()) throw new Error("사용자가 분석을 중단했습니다.");
+    if (document.hidden) {                 // 다른 앱으로 가거나 화면이 꺼지면 브라우저가 영상을 멈추므로 기다렸다가 이어감
+      onPause(true); await new Promise(r => { const on = () => { if (!document.hidden) { document.removeEventListener("visibilitychange", on); r(); } }; document.addEventListener("visibilitychange", on); });
+      onPause(false); cam.prev = null;
+    }
     const f = idx[k], t = f / fps; await seekTo(video, Math.min(t, Math.max(0, video.duration - 0.001)));
     ctx.drawImage(video, 0, 0, width, height); if (underwater) underwaterEnhance(ctx, width, height);
     let ts = tsBase + Math.round(t * 1000); if (ts <= lastTs) ts = lastTs + 1; lastTs = ts; landmarker._lastTs = ts;
@@ -42,11 +53,13 @@ export async function extractLandmarks(video, landmarker, opts) {
       if (x0 < Infinity) { const s = camW / width, mx = (x1 - x0) * 0.25 + 20, my = (y1 - y0) * 0.25 + 20; bbox = [(x0 - mx) * s, (y0 - my) * s, (x1 + mx) * s, (y1 + my) * s]; }
     }
     if (k % camStep === 0) { camCtx.drawImage(canvas, 0, 0, camW, camH); cam.push(toGray(camCtx, camW, camH), camH, bbox); }
-    if (k % 5 === 0 || k === idx.length - 1) onProgress(k + 1, idx.length, (performance.now() - t0) / (k + 1));
+    done++;
+    if (k % 5 === 0 || k === idx.length - 1) onProgress(k + 1, idx.length, (performance.now() - t0) / done);
+    if (onCheckpoint && (k + 1) % checkpointEvery === 0) await onCheckpoint(lm, k + 1, cam.mags);
     if (k % 20 === 0) await new Promise(r => setTimeout(r, 0));   // UI 숨 쉴 틈
   }
   const camera = cam.result(cameraCfg, camStep * step, width / camW);
-  return { lm, camera, width, height, msPerFrame: (performance.now() - t0) / Math.max(1, idx.length) };
+  return { lm, camera, width, height, msPerFrame: (performance.now() - t0) / Math.max(1, done), resumedFrom: startK };
 }
 /** 앞 N초를 돌려 검출률·신뢰도·속도 측정 (모델 추천용) */
 export async function trial(video, landmarker, { fps, seconds = 3, step = 2, maxLong = 960, underwater = false }) {

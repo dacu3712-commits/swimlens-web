@@ -37,13 +37,13 @@ async function captureURL(spec, width = 480) { const lm = S.session.lm; const i 
 // ------------------------------------------------------------ 세션 저장/복원
 async function persist() {
   const s = S.session; if (!s) return;
-  try { await db.saveSession({ id: s.id, name: s.name, created: s.created, settings: s.settings, videoInfo: s.videoInfo, lm: s.lm.toJSON(), report: s.report, camera: s.camera, poseInfo: s.poseInfo, review: s.review, metrics: s.metrics, cycles: s.cycles, hasMetrics: !!s.metrics, videoPath: s.videoPath || null, pdfPath: s.pdfPath || null, videoBlob: S.file || s.videoBlob || null }); }
+  try { await db.saveSession({ id: s.id, name: s.name, created: s.created, settings: s.settings, videoInfo: s.videoInfo, lm: s.lm ? s.lm.toJSON() : null, partial: s.partial || null, report: s.report, camera: s.camera, poseInfo: s.poseInfo, review: s.review, metrics: s.metrics, cycles: s.cycles, hasMetrics: !!s.metrics, videoPath: s.videoPath || null, pdfPath: s.pdfPath || null, videoBlob: S.file || s.videoBlob || null }); }
   catch (e) { console.warn(e); toast("저장 공간 부족: 결과가 기기에 저장되지 않았습니다. PDF·CSV 를 바로 내려받으세요.", 5000); }
   syncCloud();
 }
 let _syncTimer = null;
 function syncCloud() {
-  const s = S.session; if (!s || !cloud.user()) return;
+  const s = S.session; if (!s || !s.lm || !cloud.user()) return;
   clearTimeout(_syncTimer); _syncTimer = setTimeout(async () => { const r = await cloud.upsertCloud(s, s.lm.toCSV()); if (!r.ok) toast("☁ 서버 저장 실패: " + r.msg, 5000); else { s.cloudSaved = true; setCloudBadge(); } }, 800);
 }
 function setCloudBadge() { const el = $("#cloudBadge"); if (el) el.textContent = cloud.user() ? (S.session?.cloudSaved ? "☁ 저장됨" : "☁") : ""; }
@@ -55,9 +55,24 @@ async function uploadVideoIfWanted() {
 }
 async function openSession(id) {
   const rec = await db.getSession(id); if (!rec) return toast("세션을 찾을 수 없습니다");
-  S.session = { ...rec, lm: Landmarks.fromJSON(rec.lm) }; S.settings = { ...rec.settings }; S.frameCache.clear();
-  if (rec.videoBlob) { S.file = rec.videoBlob; S.video = await loadVideo(rec.videoBlob); } else { S.video = null; toast("이 세션에는 영상이 저장되어 있지 않아 캡처 이미지는 표시되지 않습니다.", 4000); }
-  $("#drawer").hidden = true; go(rec.hasMetrics ? 2 : 1);
+  S.session = { ...rec, lm: rec.lm ? Landmarks.fromJSON(rec.lm) : null }; S.settings = { ...rec.settings }; S.frameCache.clear();
+  if (rec.videoBlob) { S.file = rec.videoBlob; S.video = await loadVideo(rec.videoBlob); S.videoInfo = { ...rec.videoInfo }; } else { S.video = null; toast("이 세션에는 영상이 저장되어 있지 않아 캡처 이미지는 표시되지 않습니다.", 4000); }
+  $("#drawer").hidden = true;
+  if (!rec.hasMetrics && rec.partial && S.video) { S.runPending = true; go(1); return; }   // 중단된 분석 → 이어서
+  go(rec.hasMetrics ? 2 : 1);
+}
+/** 앱을 열 때 중단된 분석이 있으면 이어하기 안내 */
+async function checkInterrupted() {
+  try {
+    const list = await db.listSessions(); const cand = list.find(x => !x.hasMetrics);
+    if (!cand) return; const rec = await db.getSession(cand.id); if (!rec?.partial || !rec.videoBlob) return;
+    const pct = Math.round(rec.partial.k / Math.max(1, rec.partial.n) * 100);
+    const box = document.createElement("div"); box.className = "card"; box.style.borderColor = "#0f4c81";
+    box.innerHTML = `<b>⏸ 중단된 분석이 있습니다</b><p class="muted">${esc(rec.name)} · ${new Date(rec.created).toLocaleString("ko-KR")} · ${pct}% 진행됨</p><p><button class="btn" id="resumeBtn">▶ 이어서 분석하기</button> <button class="btn sec small" id="discardBtn">버리기</button></p>`;
+    app.prepend(box);
+    $("#resumeBtn").onclick = () => openSession(rec.id);
+    $("#discardBtn").onclick = async () => { await db.deleteSession(rec.id); box.remove(); };
+  } catch (e) { console.warn(e); }
 }
 async function renderDrawer() {
   const el = $("#sessionList"); const u = cloud.user();
@@ -147,7 +162,7 @@ async function startAnalysis() {
 function renderRun() {
   const s = S.session;
   if (!s) { app.innerHTML = `<div class="card"><h2>② 분석</h2><p class="muted">먼저 ① 설정에서 영상을 올리고 '분석 시작'을 눌러 주세요.</p></div>`; return; }
-  app.innerHTML = `<div class="card"><h2>② 분석 — ${esc(s.name)}</h2><div class="progress"><div id="bar"></div></div><div id="ptext" class="muted"></div><pre class="log" id="log"></pre><p><button class="btn sec small" id="stopBtn" ${S.running ? "" : "hidden"}>중단</button></p></div>
+  app.innerHTML = `<div class="card"><h2>② 분석 — ${esc(s.name)}</h2><p class="muted">분석 중에는 이 화면을 켜 두세요. 다른 앱으로 가면 일시정지되고, 앱을 닫아도 진행 상황이 30프레임마다 저장되어 다시 열면 이어서 할 수 있습니다.</p><div class="progress"><div id="bar"></div></div><div id="ptext" class="muted"></div><pre class="log" id="log"></pre><p><button class="btn sec small" id="stopBtn" ${S.running ? "" : "hidden"}>중단</button></p></div>
   <div id="runResult"></div>`;
   $("#stopBtn").onclick = () => { S.stop = true; };
   if (S.runPending) { S.runPending = false; runAnalysis(); } else if (s.metrics) showRunResult();
@@ -156,7 +171,7 @@ function log(msg) { const el = $("#log"); if (el) { el.textContent += msg + "\n"
 function progress(stage, frac, extra = "") { const b = $("#bar"), t = $("#ptext"); if (b) b.style.width = `${Math.round(frac * 100)}%`; if (t) t.textContent = `${stage} ${Math.round(frac * 100)}% ${extra}`; }
 async function getLandmarker(variant) { if (S.landmarker && S.landmarkerVariant === variant) return S.landmarker; if (S.landmarker) { try { S.landmarker.close(); } catch { } } progress("모델 불러오는 중", 0, `(${variant})`); S.landmarker = await createLandmarker({ variant }); S.landmarkerVariant = variant; log(`MediaPipe Pose ${variant} 로드 (${S.landmarker._delegate})`); return S.landmarker; }
 async function runAnalysis() {
-  const s = S.session, st = s.settings; S.running = true; S.stop = false; $("#stopBtn").hidden = false; const t0 = performance.now();
+  const s = S.session, st = s.settings; S.running = true; S.stop = false; $("#stopBtn").hidden = false; const t0 = performance.now(); keepAwake();
   try {
     const under = st.underwater_preprocess && ["side_under", "bottom"].includes(st.view);
     if (S.importedCsv) {
@@ -172,9 +187,17 @@ async function runAnalysis() {
         const res = {}; for (const v of ["full", "lite"]) { const lmk = await getLandmarker(v); progress("모델 비교", v === "full" ? 0.2 : 0.6); res[v] = await trial(S.video, lmk, { fps: s.videoInfo.fps, seconds: 3, step: 2, maxLong: st.max_long_side, underwater: under }); log(`${v}: 검출률 ${(res[v].detect_rate * 100).toFixed(0)}%, 신뢰도 ${(res[v].mean_visibility * 100).toFixed(0)}점, ${res[v].ms_per_frame.toFixed(0)}ms/프레임`); }
         variant = (Math.round(res.full.detect_rate * 10) > Math.round(res.lite.detect_rate * 10) || res.full.mean_visibility >= res.lite.mean_visibility - 0.03) ? "full" : "lite"; log(`→ 선택: ${variant}`); s.poseInfo = { trials: res };
       }
+      if (s.partial?.variant) variant = s.partial.variant;
+      s.partial = s.partial || { k: 0, n: 0, variant }; s.partial.variant = variant; await persist();    // 영상과 설정을 먼저 기기에 저장
       const lmk = await getLandmarker(variant);
+      const resume = s.partial.lm ? { lm: Landmarks.fromJSON(s.partial.lm), k: s.partial.k, camMags: s.partial.camMags } : null;
+      if (resume) log(`이어서 분석: ${resume.k}프레임까지 완료된 상태에서 계속합니다`);
       log(`자세 추정 시작: ${s.videoInfo.analysis.width}x${s.videoInfo.analysis.height}, ${s.videoInfo.fps}fps, ${Math.floor(s.videoInfo.duration * s.videoInfo.fps)}프레임${st.frame_step > 1 ? ` (${st.frame_step}프레임 중 1)` : ""}`);
-      const out = await extractLandmarks(S.video, lmk, { fps: s.videoInfo.fps, step: st.frame_step, maxLong: st.max_long_side, underwater: under, cameraCfg: S.configs.thresholds.camera_motion, onProgress: (i, n, ms) => progress("자세 추정", i / n, `(${ms.toFixed(0)} ms/프레임, 남은 시간 약 ${Math.ceil((n - i) * ms / 1000)}초)`), shouldStop: () => S.stop });
+      const out = await extractLandmarks(S.video, lmk, { fps: s.videoInfo.fps, step: st.frame_step, maxLong: st.max_long_side, underwater: under, cameraCfg: S.configs.thresholds.camera_motion, onProgress: (i, n, ms) => progress("자세 추정", i / n, `(${ms.toFixed(0)} ms/프레임, 남은 시간 약 ${Math.ceil((n - i) * ms / 1000)}초)`), shouldStop: () => S.stop,
+        resume, checkpointEvery: 30,
+        onCheckpoint: async (lmPart, k, camMags) => { s.partial = { variant, k, n: lmPart.n, lm: lmPart.toJSON(), camMags }; try { await db.saveSession({ ...(await db.getSession(s.id)), partial: s.partial }); } catch (e) { console.warn(e); } },
+        onPause: (paused) => { log(paused ? "⏸ 화면이 꺼지거나 다른 앱으로 이동해 일시정지했습니다. 돌아오면 이어서 진행합니다." : "▶ 다시 진행합니다"); if (!paused) keepAwake(); } });
+      s.partial = null;
       const { lm, report } = prepareLandmarks(out.lm, S.configs.thresholds);
       s.lm = lm; s.report = report; s.camera = out.camera; s.poseInfo = { ...(s.poseInfo || {}), backend: `MediaPipe Pose ${variant} (${lmk._delegate})`, ms_per_frame: out.msPerFrame, analyzed_frames: lm.n, detect_rate: report.detect_rate };
       log(`자세 추정 완료: ${lm.n}프레임, ${out.msPerFrame.toFixed(0)} ms/프레임, 검출률 ${(report.detect_rate * 100).toFixed(0)}%`); log("카메라: " + out.camera.note);
@@ -183,8 +206,14 @@ async function runAnalysis() {
     progress("지표 계산", 0.9); recompute(); progress("완료", 1, `(${((performance.now() - t0) / 1000).toFixed(0)}초)`); log(`완료: ${((performance.now() - t0) / 1000).toFixed(0)}초`);
     await persist(); showRunResult(); toast("분석이 끝났습니다. ③ 검수에서 확인하세요."); uploadVideoIfWanted();
   } catch (e) { console.error(e); log("오류: " + e.message); $("#runResult").innerHTML = `<div class="err">${esc(e.message)}</div>`; }
-  finally { S.running = false; const b = $("#stopBtn"); if (b) b.hidden = true; }
+  finally { S.running = false; releaseAwake(); const b = $("#stopBtn"); if (b) b.hidden = true; }
 }
+// 분석 중 화면 꺼짐 방지 (지원 브라우저) + 창 닫기 경고
+let _wake = null;
+async function keepAwake() { try { if ("wakeLock" in navigator && !document.hidden) _wake = await navigator.wakeLock.request("screen"); } catch { _wake = null; } }
+function releaseAwake() { try { _wake?.release(); } catch { } _wake = null; }
+window.addEventListener("beforeunload", (e) => { if (S.running) { e.preventDefault(); e.returnValue = "분석이 진행 중입니다. 지금 닫아도 다음에 이어서 할 수 있습니다."; } });
+
 function recompute() {
   const s = S.session; const out = analyze({ lm: s.lm, report: s.report, settings: s.settings, configs: S.configs, review: s.review, cameraMotion: s.camera, log });
   s.metrics = out.results; s.cycles = out.cycles; s.camera = out.camera; s.hasMetrics = true;
@@ -307,7 +336,7 @@ async function boot() {
   $("#menuBtn").onclick = () => { $("#drawer").hidden = false; renderDrawer(); }; $("#drawerClose").onclick = () => $("#drawer").hidden = true;
   const badge = document.createElement("span"); badge.id = "cloudBadge"; badge.className = "muted"; badge.style.color = "#fff"; badge.style.fontSize = "12px"; $("#menuBtn").before(badge); setCloudBadge();
   if ("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("sw.js").catch(() => { });
-  render();
+  render(); checkInterrupted();
 }
 window.__swimlens = S;
 boot();
