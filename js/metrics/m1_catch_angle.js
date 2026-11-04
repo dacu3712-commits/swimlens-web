@@ -4,7 +4,7 @@ export const key = "catch_angle", name = "팔꿈치 캐치 각도";
 export function compute(ctx) {
   const r = newResult(key, name), th = ctx.th.catch_angle;
   if (!ctx.cycles.cycles.length) return unmeasured(key, name, "스트로크 사이클을 찾지 못해 측정할 수 없습니다. " + ctx.cycles.note);
-  const sides = ctx.settings.stroke === "butterfly" ? ["left", "right"] : [arm(ctx)];
+  const sides = ["butterfly", "breaststroke"].includes(ctx.settings.stroke) ? ["left", "right"] : [arm(ctx)];
   const frames = [];
   for (const c of ctx.cycles.cycles) for (const side of sides) {
     const ev = armEvents(ctx, c.index, c.start, c.end, side, key);

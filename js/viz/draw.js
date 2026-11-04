@@ -35,6 +35,7 @@ export function renderCapture(frameCanvas, lm, i, spec, outWidth = 640) {
   const src = box || { x: 0, y: 0, w: W, h: H }; const s = outWidth / src.w; const out = document.createElement("canvas"); out.width = Math.round(src.w * s); out.height = Math.round(src.h * s);
   const ctx = out.getContext("2d"); ctx.drawImage(frameCanvas, src.x, src.y, src.w, src.h, 0, 0, out.width, out.height);
   ctx.save(); ctx.translate(-src.x * s, -src.y * s);
+  if (spec.overlay) spec.overlay(ctx, s);   // 모범 자세 등 (학생 스켈레톤 아래)
   drawSkeleton(ctx, lm, i, { highlight: spec.highlight || [], scale: s }); for (const ln of spec.lines || []) drawLine(ctx, lm, i, ln, s); if (spec.angle) drawAngle(ctx, lm, i, spec.angle.joints, spec.angle.value, s);
   ctx.restore();
   const fs = Math.max(12, Math.round(out.width / 36)); label(ctx, `${spec.label}  (프레임 ${lm.frame[i]}, ${(lm.t_ms[i] / 1000).toFixed(2)}s)`, 8, 8, fs);

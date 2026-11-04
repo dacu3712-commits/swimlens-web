@@ -85,3 +85,17 @@ streamline:
   sink_angle_yellow_max: 10    # 5~10° 보통, 10° 이상 개선 필요
   hip_bend_yellow_deg: 8       # 골반 꺾임 각도 주의
   hip_bend_red_deg: 15
+
+# ---------- 영법별 기준 덮어쓰기 (웹 버전) ----------
+# 여기 적은 값만 해당 영법에서 위 기본값 대신 씁니다. 평영·배영 값은 임시값이니 코치가 확인 후 고쳐 주세요.
+stroke_overrides:
+  breaststroke:
+    knee_hip_kick:
+      knee_green: [40, 70]       # 평영 킥 직전 무릎은 깊게 접힘
+      knee_yellow_margin: 15
+      knee_red_below: 25
+    catch_angle:
+      green: [90, 120]
+  backstroke:
+    catch_angle:
+      green: [90, 120]

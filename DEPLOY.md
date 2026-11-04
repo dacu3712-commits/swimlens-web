@@ -26,3 +26,18 @@
 - 저장 위치: 표 `public.swimlens_sessions`(본인 행만 읽기/쓰기, RLS), 스토리지 `swimlens/<내 user id>/<세션 id>/report.pdf, source.mp4`.
 - 무료 플랜 용량(DB 500MB, 스토리지 1GB)을 넘기지 않으려면 영상 보관은 필요한 것만 켜세요.
 - 나중에 다른 사람에게 열 때: 각자 가입(게임과 같은 가입 흐름)하면 자기 결과만 보게 이미 설정되어 있습니다.
+
+## ✨ 코멘트 다듬기 설정 (한 번만, 약 5분)
+
+코치가 먼저 쓴 코멘트를 Claude 가 코치 말투로 다듬어 "제안"으로 보여 주는 기능입니다. API 키는 Supabase 서버에만 두고 웹사이트에는 넣지 않습니다.
+
+1. **Claude API 키 만들기**: https://platform.claude.com → API Keys → Create Key → 복사 (결제 수단 등록 필요, 코멘트 1회 약 10~30원).
+2. **Supabase 대시보드 → Edge Functions → Deploy a new function → Via Editor**
+   - 함수 이름: `swimlens-polish`
+   - 내용: 저장소의 `supabase/functions/swimlens-polish/index.ts` 전체를 붙여 넣고 **Deploy**.
+3. **Edge Functions → Secrets (또는 Project Settings → Edge Functions)** 에서 추가:
+   - `ANTHROPIC_API_KEY` = 1번 키
+   - `ALLOWED_EMAILS` = `dacu3712@gmail.com` (쉼표로 여러 명. 비우면 로그인한 누구나 쓸 수 있으니 꼭 넣으세요)
+4. 사이트 📂 메뉴에서 로그인 → 검수 화면 코멘트 아래 **✨ 다듬기** → 제안을 보고 **적용** 또는 **버리기**.
+- 말투는 `config/coach_style.md` 를 고치면 바로 반영됩니다 (시그니처 큐, 문장 길이 등).
+- 다듬기는 코치 초안의 내용과 수치를 바꾸지 않도록 지시되어 있고, 측정값과 다른 숫자가 있으면 ⚠ 로 알려 줍니다.

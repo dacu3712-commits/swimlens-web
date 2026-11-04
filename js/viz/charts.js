@@ -32,5 +32,9 @@ export function renderChart(spec, width = 640) {
     });
     chart = new Chart(canvas, { type: "scatter", data: { datasets }, options: { ...base(spec.title), plugins: { ...base(spec.title).plugins, legend: { labels: { filter: it => it.text, font: { family: "Noto Sans KR", size: 10 } } } }, scales: { x: { title: { display: true, text: spec.xlabel + (spec.m_per_px ? " [m]" : " [px]") } }, y: { reverse: true, title: { display: true, text: spec.ylabel + (spec.m_per_px ? " [m]" : " [px]") } } } } });
   }
+  else if (spec.type === "trend") {
+    canvas = canvasFor(width, 300); const cols = [C.blue, C.orange, C.green, C.red];
+    chart = new Chart(canvas, { type: "line", data: { labels: spec.labels, datasets: spec.series.map((s, i) => ({ label: s.name, data: s.data, borderColor: cols[i % 4], backgroundColor: cols[i % 4], spanGaps: true, pointRadius: 4, borderWidth: 2 })) }, options: { ...base(spec.title), scales: { y: { title: { display: true, text: spec.ylabel } } } } });
+  }
   const url = canvas.toDataURL("image/png"); chart.destroy(); return url;
 }

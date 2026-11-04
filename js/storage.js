@@ -5,5 +5,6 @@ async function tx(mode, fn) { const db = await open(); return new Promise((res, 
 export const saveSession = (sess) => tx("readwrite", s => s.put(sess));
 export const getSession = (id) => tx("readonly", s => s.get(id));
 export const deleteSession = (id) => tx("readwrite", s => s.delete(id));
-export async function listSessions() { const all = await tx("readonly", s => s.getAll()); return (all || []).map(({ id, kind, name, created, settings, videoInfo, hasMetrics, partial }) => ({ id, kind: kind || "video", name, created, settings, videoInfo, hasMetrics, hasPartial: !!partial })).sort((a, b) => b.created - a.created); }
+export async function listRefs() { const all = await tx("readonly", s => s.getAll()); return (all || []).filter(r => r.kind === "ref"); }
+export async function listSessions() { const all = (await tx("readonly", s => s.getAll()) || []).filter(r => r.kind !== "ref"); return all.map(({ id, kind, name, created, settings, videoInfo, hasMetrics, partial }) => ({ id, kind: kind || "video", name, created, settings, videoInfo, hasMetrics, hasPartial: !!partial })).sort((a, b) => b.created - a.created); }
 export function newId(name) { const d = new Date(); const ymd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`; return `${ymd}_${(name || "수강생").replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 20)}_${d.getHours()}${String(d.getMinutes()).padStart(2, "0")}${String(d.getSeconds()).padStart(2, "0")}`; }

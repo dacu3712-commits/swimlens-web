@@ -28,6 +28,31 @@ function makeInput(video, width, height, roi) {
   canvas.width = width; canvas.height = height;
   return { canvas, draw: (ctx) => ctx.drawImage(video, 0, 0, width, height), map: (p) => [p.x * width, p.y * height] };
 }
+/** 수영자 자동 추적 확대: 직전 프레임에서 찾은 사람 주변을 정사각형으로 잘라 고정 크기 캔버스에 키워 넣는다 */
+function makeTracker(video, width, height, baseRoi, size = 720) {
+  const canvas = document.createElement("canvas"); canvas.width = size; canvas.height = size;
+  const B = baseRoi && baseRoi.w > 10 ? baseRoi : { x: 0, y: 0, w: width, h: height };
+  let box = null, lost = 0;                       // {cx, cy, s} 분석 좌표계
+  const sx = video.videoWidth / width, sy = video.videoHeight / height;
+  let cur = null;
+  function crop() {
+    if (!box || lost > 2) { const s0 = Math.max(B.w, B.h); cur = { x: B.x + B.w / 2 - s0 / 2, y: B.y + B.h / 2 - s0 / 2, s: s0 }; }
+    else cur = { x: box.cx - box.s / 2, y: box.cy - box.s / 2, s: box.s };
+    return cur;
+  }
+  return {
+    canvas,
+    draw(ctx) { const c = crop(); ctx.fillStyle = "#000"; ctx.fillRect(0, 0, size, size); ctx.drawImage(video, c.x * sx, c.y * sy, c.s * sx, c.s * sy, 0, 0, size, size); },
+    map(p) { return [cur.x + p.x * cur.s, cur.y + p.y * cur.s]; },
+    update(bb) {                                   // bb: [x0,y0,x1,y1] 분석 좌표, 없으면 null
+      if (!bb) { lost++; return; } lost = 0;
+      const cx = (bb[0] + bb[2]) / 2, cy = (bb[1] + bb[3]) / 2; const s = Math.max(Math.max(bb[2] - bb[0], bb[3] - bb[1]) * 1.6, Math.min(width, height) * 0.25);
+      box = box ? { cx: box.cx * 0.4 + cx * 0.6, cy: box.cy * 0.4 + cy * 0.6, s: box.s * 0.5 + s * 0.5 } : { cx, cy, s };
+      box.s = Math.min(box.s, Math.max(B.w, B.h) * 1.2);
+    },
+    get box() { return cur; },
+  };
+}
 export function frameRange(duration, fps, step, start = 0, end = null) {
   const nFrames = Math.floor(duration * fps); const a = Math.max(0, Math.round((start || 0) * fps)); const b = Math.min(nFrames, end ? Math.ceil(end * fps) : nFrames);
   const idx = []; for (let f = a; f < b; f += step) idx.push(f); return idx;
@@ -37,9 +62,9 @@ export function frameRange(duration, fps, step, start = 0, end = null) {
  * opts: {fps, step, maxLong, underwater, cameraCfg, onProgress(i,total,msPerFrame), shouldStop()}
  */
 export async function extractLandmarks(video, landmarker, opts) {
-  const { fps, step = 1, maxLong = 960, underwater = false, onProgress = () => {}, shouldStop = () => false, cameraCfg = {}, resume = null, onCheckpoint = null, checkpointEvery = 30, onPause = () => {}, start = 0, end = null, roi = null } = opts;
+  const { fps, step = 1, maxLong = 960, underwater = false, onProgress = () => {}, shouldStop = () => false, cameraCfg = {}, resume = null, onCheckpoint = null, checkpointEvery = 30, onPause = () => {}, start = 0, end = null, roi = null, track = false } = opts;
   const { width, height } = analysisSize(video, maxLong);
-  const inp = makeInput(video, width, height, roi); const canvas = inp.canvas; const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  const inp = track ? makeTracker(video, width, height, roi) : makeInput(video, width, height, roi); const canvas = inp.canvas; const ctx = canvas.getContext("2d", { willReadFrequently: true });
   const idx = frameRange(video.duration, fps, step, start, end);
   const lm = new Landmarks(idx.length, fps / step, width, height);
   for (let k = 0; k < idx.length; k++) { lm.frame[k] = idx[k]; lm.t_ms[k] = idx[k] / fps * 1000; }
@@ -66,8 +91,9 @@ export async function extractLandmarks(video, landmarker, opts) {
     if (res.landmarks && res.landmarks[0]) {
       let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
       res.landmarks[0].slice(0, JOINTS.length).forEach((p, i) => { const vis = Math.min(p.visibility ?? 1, p.presence ?? 1); const [x, y] = inp.map(p); lm.set(k, JOINTS[i], x, y, vis); if (vis > 0.3) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); } });
-      if (x0 < Infinity) { const s = camW / width, mx = (x1 - x0) * 0.25 + 20, my = (y1 - y0) * 0.25 + 20; bbox = [(x0 - mx) * s, (y0 - my) * s, (x1 + mx) * s, (y1 + my) * s]; }
-    }
+      if (x0 < Infinity) { const s = camW / width, mx = (x1 - x0) * 0.25 + 20, my = (y1 - y0) * 0.25 + 20; bbox = [(x0 - mx) * s, (y0 - my) * s, (x1 + mx) * s, (y1 + my) * s]; if (inp.update) inp.update([x0, y0, x1, y1]); }
+      else if (inp.update) inp.update(null);
+    } else if (inp.update) inp.update(null);
     if (k % camStep === 0) { camCtx.drawImage(video, 0, 0, camW, camH); cam.push(toGray(camCtx, camW, camH), camH, bbox); }
     done++;
     if (k % 5 === 0 || k === idx.length - 1) onProgress(k + 1, idx.length, (performance.now() - t0) / done);

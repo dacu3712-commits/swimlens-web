@@ -15,7 +15,7 @@ export function armEvents(ctx, cycleIdx, start, end, side, metricKey = "split_ti
   for (let i = start; i < Math.max(start, end - 2); i++) if (vd[i] > thr && vd[i + 1] > thr) { catchStart = i; break; }
   // 2) 풀→피니시 전환
   const rel = new Float64Array(n); for (let i = 0; i < n; i++) rel[i] = wristF[i] - shF[i];
-  const pullToFinish = firstCrossing(rel, catchStart ?? start, end, "down");
+  let pullToFinish = firstCrossing(rel, catchStart ?? start, end, "down");
   // 3) 캐치 끝선
   const ea = elbowAngle(ctx, side); const a0 = catchStart ?? start; const a1 = pullToFinish !== null ? pullToFinish + 3 : start + Math.floor(0.6 * (end - start));
   const under = new Float64Array(n); for (let i = 0; i < n; i++) under[i] = wristD[i] > shD[i] ? ea[i] : NaN;
@@ -25,6 +25,10 @@ export function armEvents(ctx, cycleIdx, start, end, side, metricKey = "split_ti
   const hipPass = firstCrossing(hipRel, p0, end, "down"); const q0 = hipPass ?? p0;
   for (let i = q0; i < end; i++) if (!Number.isNaN(wristD[i]) && !Number.isNaN(shD[i]) && wristD[i] < shD[i]) { exit = i; break; }
   if (exit === null && end > q0) exit = nanargmin(wristD, q0, end);
+  if (ctx.settings.stroke === "breaststroke") {
+    let ins = null, mn = Infinity; for (let i = catchEnd ?? a0; i < end; i++) { const v = rel[i]; if (!Number.isNaN(v) && v < mn) { mn = v; ins = i; } }
+    if (ins !== null) { exit = ins; }
+  }
   const ev = { cycle: cycleIdx, side, entry: start, catch_start: catchStart, catch_end: catchEnd, pull_to_finish: pullToFinish, exit, next_entry: end, elbow_angle_min: null };
   for (const name of ["catch_start", "catch_end", "pull_to_finish", "exit"]) { const [v, ed] = override(ctx, metricKey, `c${cycleIdx}_${name}`, ev[name]); if (ed) ev[name] = v; }
   if (ev.catch_end !== null && !Number.isNaN(ea[ev.catch_end])) ev.elbow_angle_min = ea[ev.catch_end];

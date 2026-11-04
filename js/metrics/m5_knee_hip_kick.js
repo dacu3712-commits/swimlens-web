@@ -16,7 +16,7 @@ export function compute(ctx) {
   if (knee.every(Number.isNaN)) return unmeasured(key, name, "무릎·발목이 인식되지 않아 각도를 계산할 수 없습니다.");
   const ankleD = ankleDepthSignal(ctx, side);
   const beats = peaks(ankleD, fps, th.kick_peak_min_distance_sec ?? 0.15, 0.15, true);
-  const isFly = ctx.settings.stroke === "butterfly", timingOn = isFly || !!th.freestyle_timing_enabled, matchMs = th.timing_match_ms ?? 100;
+  const stroke = ctx.settings.stroke; const isFly = stroke === "butterfly", isBreast = stroke === "breaststroke", timingOn = isFly || (!isBreast && !!th.freestyle_timing_enabled), matchMs = th.timing_match_ms ?? 100;
   const frames = [], kneeVals = [];
   for (const c of ctx.cycles.cycles) {
     let [fk, edited] = override(ctx, key, `c${c.index}_knee_min`, nanargmin(knee, c.start, c.end));
@@ -42,7 +42,14 @@ export function compute(ctx) {
   if (timingOn) for (const tag of ["entry", "exit"]) { const diffs = r.per_cycle.map(p => p[tag + "_kick_diff_ms"]).filter(v => v !== null && v !== undefined); r.summary[tag + "_kick_diff_ms_mean"] = diffs.length ? diffs.reduce((a, b) => a + b) / diffs.length : null; if (diffs.length) { const m = Math.abs(r.summary[tag + "_kick_diff_ms_mean"]); light = worst(light, m <= matchMs ? "green" : m <= 2 * matchMs ? "yellow" : "red"); } }
   r.traffic = light;
   r.confidence = confidenceScore(ctx, [side + "_hip", side + "_knee", side + "_ankle"], frames);
-  if (!isFly) r.notes.push(`자유형: 사이클당 평균 킥 ${r.summary.kicks_per_cycle_mean.toFixed(1)}회 (참고). 킥 타이밍 판정은 접영에서만 수행합니다.`);
+  if (isBreast) {   // 평영: 킥을 다 찬 뒤(무릎이 다시 펴진 순간) → 다음 캐치 시작까지 = 글라이드 시간
+    const glides = [];
+    for (const p of r.per_cycle) { const c = ctx.cycles.cycles[p.cycle - 1]; if (p.knee_min_frame === null) continue; let ext = null; for (let i = p.knee_min_frame; i < Math.min(lm.n, c.end + Math.floor(0.6 * fps)); i++) if (knee[i] >= 165) { ext = i; break; }
+      const next = ctx.cycles.cycles[p.cycle]; let catchNext = null; if (next) { const ev = armEvents(ctx, next.index, next.start, next.end, "left", "split_time"); catchNext = ev.catch_start ?? next.start; }
+      if (ext !== null && catchNext !== null && catchNext > ext) { p.glide_sec = (catchNext - ext) / fps; glides.push(p.glide_sec); } }
+    r.summary.glide_sec_mean = glides.length ? glides.reduce((a, b) => a + b) / glides.length : null;
+    r.notes.push(`평영: 킥을 다 찬 뒤 다음 캐치까지 글라이드 ${r.summary.glide_sec_mean != null ? r.summary.glide_sec_mean.toFixed(2) + "초" : "측정 못함"} (참고). 평영 기준값은 임시이니 thresholds.yaml 에서 조정하세요.`);
+  } else if (!isFly) r.notes.push(`${stroke === "backstroke" ? "배영" : "자유형"}: 사이클당 평균 킥 ${r.summary.kicks_per_cycle_mean.toFixed(1)}회 (참고). 킥 타이밍 판정은 접영에서만 수행합니다.`);
   r.charts.push({ type: "bar", title: "사이클별 킥 직전 무릎 각도", ylabel: "각도 (°)", values: kneeVals, labels: r.per_cycle.map(p => String(p.cycle)), green: th.knee_green, yellowMargin: th.knee_yellow_margin });
   const t = lm.t; const evs = beats.map(b => ({ x: t[b], label: "킥 다운비트", color: "orange" }));
   if (timingOn) for (const c of ctx.cycles.cycles) { const ev = armEvents(ctx, c.index, c.start, c.end, side); evs.push({ x: t[ev.entry], label: "손 입수", color: "blue" }); if (ev.exit !== null) evs.push({ x: t[ev.exit], label: "손 출수", color: "red" }); }

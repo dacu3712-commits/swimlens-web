@@ -22,7 +22,7 @@ export function headline(k, r) {
 /**
  * build({session, results, images:{charts:{key:[dataURL]}, captures:{key:[dataURL]}}, configs, fonts:{regular,bold ArrayBuffer}})
  */
-export async function buildPdf({ session, results, cycles, images, configs, fonts }) {
+export async function buildPdf({ session, results, cycles, images, configs, fonts, history = null, qr = null }) {
   const { PDFDocument, rgb } = window.PDFLib; const doc = await PDFDocument.create(); doc.registerFontkit(window.fontkit);
   // fontkit 의 서브셋 임베드가 이 폰트에서 글리프를 잃어버리므로 통째로 임베드 (폰트 자체가 2350자 서브셋이라 ~0.6MB)
   const F = await doc.embedFont(fonts.regular, { subset: false }), FB = await doc.embedFont(fonts.bold, { subset: false });
@@ -49,6 +49,7 @@ export async function buildPdf({ session, results, cycles, images, configs, font
   const un = Object.values(results).filter(r => r.status === "unmeasured"); if (un.length) { y = text("측정하지 못한 지표", M, y, { size: 13, font: FB }); for (const r of un) y = text(`• ${r.name}: ${r.reason}`, M, y - 2); }
   y = text(`스트로크 사이클 ${cycles?.n_cycles || 0}개 분석` + (cycles?.side ? ` (분석 팔: ${{ left: "왼팔", right: "오른팔", both: "양팔" }[cycles.side] || cycles.side})` : ""), M, y - 8, { size: 8.5, color: gray });
   if (session.camera?.note) y = text("카메라: " + session.camera.note, M, y, { size: 8.5, color: gray });
+  if (qr?.dataURL) { y -= 14; const h = await image(qr.dataURL, M, y, 96, 96); page.drawText(clean("📱 폰 카메라로 찍으면 스켈레톤 분석 영상이 열립니다").replace(/^\?\s*/, ""), { x: M + 108, y: y - 30, size: 10.5, font: FB }); page.drawText(clean(qr.note || "링크는 1년 동안 유효합니다"), { x: M + 108, y: y - 46, size: 8.5, font: F, color: gray }); y -= h + 6; }
   // ---- 지표별
   for (const [k, r] of Object.entries(results)) {
     if (r.status === "unmeasured") continue;
@@ -67,6 +68,14 @@ export async function buildPdf({ session, results, cycles, images, configs, font
     ensure(70); y = text("코치 코멘트", M, y - 6, { size: 13, font: FB });
     const cl = wrap(r.comment || "", F, 10.5, W - 16); const bh = cl.length * 15 + 12; page.drawRectangle({ x: M, y: y - bh, width: W, height: bh, color: rgb(0.957, 0.969, 0.984) }); y = text(r.comment || "", M + 8, y - 6, { size: 10.5, maxW: W - 16 }) - 10;
     if (r.drills?.length) y = text("추천 드릴: " + r.drills.join(" · "), M, y, { size: 8.5, color: gray });
+  }
+  // ---- 변화 추이
+  if (history && history.rows?.length >= 2 && history.used?.length) {
+    newPage(); y = text("이전 기록과 비교", M, y, { size: 18, font: FB, color: navy }); y = text("같은 이름으로 저장된 분석을 날짜순으로 모았습니다. 굵은 줄이 이번 분석입니다.", M, y - 2, { size: 9, color: gray }) - 6;
+    const cols = history.used; const cw = Math.min(70, (W - 90) / cols.length);
+    cols.forEach((t, k) => wrap(t.label, F, 7.5, cw - 4).forEach((ln, li) => page.drawText(ln, { x: M + 90 + k * cw, y: y - 8 - li * 9, size: 7.5, font: F, color: gray }))); y -= 30;
+    for (const r of history.rows) { const fnt = r.current ? FB : F; page.drawText(clean(`${r.date} ${r.kind}`), { x: M, y: y - 9, size: 9, font: fnt }); cols.forEach((t, k) => { const v = r.values[t.key]; page.drawText(v === null ? "-" : v.toFixed(t.key === "cycle" ? 2 : 0), { x: M + 90 + k * cw, y: y - 9, size: 9, font: fnt }); }); y -= 15; if (y < 200) break; }
+    if (history.chartURL) { y -= 10; const h = await image(history.chartURL, M, y, W, 230); y -= h; }
   }
   // ---- 마무리
   newPage(); y = text("우선 개선 포인트 TOP 3", M, y, { size: 18, font: FB, color: navy });

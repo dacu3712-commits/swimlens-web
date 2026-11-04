@@ -6,7 +6,7 @@ export function compute(ctx) {
   const r = newResult(key, name), th = ctx.th.hand_path, view = ctx.settings.view;
   if (!ctx.cycles.cycles.length) return unmeasured(key, name, "스트로크 사이클을 찾지 못해 측정할 수 없습니다. " + ctx.cycles.note);
   const sideView = view === "side_under" || view === "side_above";
-  const sides = (ctx.settings.stroke === "butterfly" || !sideView) ? ["left", "right"] : [arm(ctx)];
+  const sides = (["butterfly", "breaststroke"].includes(ctx.settings.stroke) || !sideView) ? ["left", "right"] : [arm(ctx)];
   const wl = ctx.wl, mpp = ctx.frame2d.m_per_px; const paths = [], frames = [];
   let shoulderW = null; if (!sideView) { const a = wl.fwd("left_shoulder"), b = wl.fwd("right_shoulder"), d = new Float64Array(wl.n); for (let i = 0; i < wl.n; i++) d[i] = Math.abs(a[i] - b[i]); shoulderW = nanmedian(d); }
   for (const c of ctx.cycles.cycles) for (const side of sides) {

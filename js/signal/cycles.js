@@ -23,10 +23,10 @@ function build(sig, fps, cfg, side) {
 }
 export function segmentCycles(wl, stroke, cameraSideArm, cfg, view = "side_under") {
   if (view === "front" || view === "back") {
-    if (stroke === "butterfly") { const l = wl.depth("left_wrist"), r = wl.depth("right_wrist"), s = new Float64Array(wl.n); for (let i = 0; i < wl.n; i++) s[i] = -nanmean([l[i], r[i]]); return build(s, wl.fps, cfg, "both"); }
+    if (stroke === "butterfly" || stroke === "breaststroke") { const l = wl.depth("left_wrist"), r = wl.depth("right_wrist"), s = new Float64Array(wl.n); for (let i = 0; i < wl.n; i++) s[i] = -nanmean([l[i], r[i]]); return build(s, wl.fps, cfg, "both"); }
     return build(rollSignal(wl), wl.fps, cfg, "left");
   }
-  let side = stroke === "butterfly" ? "both" : cameraSideArm;
+  let side = (stroke === "butterfly" || stroke === "breaststroke") ? "both" : cameraSideArm;
   let sig = wristRelativeSignal(wl, side);
   const validRatio = 1 - sig.filter(Number.isNaN).length / sig.length;
   if (validRatio < 0.3 && side !== "both") { const other = side === "left" ? "right" : "left"; const s2 = wristRelativeSignal(wl, other); if (1 - s2.filter(Number.isNaN).length / s2.length > validRatio) { sig = s2; side = other; } }

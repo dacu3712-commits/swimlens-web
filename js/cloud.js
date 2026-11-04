@@ -70,3 +70,14 @@ export async function signedUrl(path, seconds = 3600) {
 }
 export async function patchCloud(id, fields) { if (!(await ensureToken())) return false; const r = await req(`${T}?id=eq.${encodeURIComponent(id)}`, { method: "PATCH", body: fields, headers: { Prefer: "return=minimal" } }); return r.ok; }
 export const userPath = (sessId, file) => `${auth?.id}/${sessId}/${file}`;
+
+// ---------------- ✨ 코멘트 다듬기 (Supabase Edge Function → Claude)
+let _style = null;
+async function coachStyle() { if (_style !== null) return _style; try { _style = await (await fetch(new URL("../config/coach_style.md", import.meta.url))).text(); } catch { _style = ""; } return _style; }
+export async function polishComment({ draft, metric, measures }) {
+  if (!(await ensureToken())) return { ok: false, msg: "📂 메뉴에서 먼저 로그인해 주세요 (게임과 같은 계정)" };
+  const r = await req("/functions/v1/swimlens-polish", { method: "POST", body: { draft, metric, measures, style: await coachStyle() } });
+  if (r.ok && r.data?.text) return { ok: true, text: r.data.text, note: r.data.note || "" };
+  if (r.status === 404) return { ok: false, msg: "다듬기 서버 함수가 아직 없습니다. DEPLOY.md 의 '코멘트 다듬기 설정'을 한 번 해 주세요." };
+  return { ok: false, msg: r.data?.error || `다듬기 실패 (${r.status})` };
+}
