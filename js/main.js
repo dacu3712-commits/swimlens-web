@@ -10,6 +10,7 @@ import { buildPdf, keyValues } from "./report/pdf.js";
 import { autoTop3 } from "./report/summary.js";
 import * as db from "./storage.js";
 import * as cloud from "./cloud.js";
+import { setCandidateVideo } from "./candidates.js";
 import { initPhoto, renderPhoto, openPhotoSession, addPhotoFromCanvas, photoMetricsOf } from "./photo.js";
 import { loadRefs, alignRef, drawRef, REF_KIND_OF_EVENT } from "./viz/reference.js";
 import { attachPolish, measuresOf } from "./polishui.js";
@@ -152,13 +153,14 @@ function renderSetup() {
     <div class="muted">확대 영역: <b>${S.clicks.roi?.length === 2 ? "지정됨 ✅" : "없음 (화면 전체)"}</b> ${S.clicks.roi?.length ? '<button class="btn small sec" id="clearRoi">지우기</button>' : ""} — 수영자가 지나가는 자리를 왼쪽 위·오른쪽 아래 두 번 눌러 상자로 지정</div>
     <div class="grid" style="margin-top:8px"><div>수면선: <b>${S.clicks.wl.length === 2 ? "지정됨 ✅" : `${S.clicks.wl.length}/2 점 (미지정 시 화면 수평·위에서 30%)`}</b> <button class="btn small sec" id="clearWl">지우기</button></div>
     <div>거리 기준: <b>${S.clicks.sc.length === 2 ? "지정됨 ✅" : `${S.clicks.sc.length}/2 점`}</b> <label class="f" style="display:inline-flex">두 점 사이 실제 거리(m) <input type="number" step="0.5" min="0" data-k="scale_meters" value="${st.scale_meters ?? ""}" style="width:90px"></label> <button class="btn small sec" id="clearSc">지우기</button></div></div>
-    <p style="margin-top:12px"><button class="btn" id="startBtn">🚀 분석 시작</button> <span class="muted">예상 시간: 영상 ${S.videoInfo.duration.toFixed(0)}초 × 프레임당 0.05~0.2초</span></p></div>` : ""}`;
+    <p style="margin-top:12px"><button class="btn" id="startBtn">🚀 분석 시작</button> <button class="btn sec" id="toCand">📷 이 영상에서 사진 후보 뽑기</button> <span class="muted">예상 시간: 영상 ${S.videoInfo.duration.toFixed(0)}초 × 프레임당 0.05~0.2초</span></p></div>` : ""}`;
   // 이벤트
   const drop = $("#drop"); drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); }); drop.addEventListener("dragleave", () => drop.classList.remove("over")); drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); if (e.dataTransfer.files[0]) onFile(e.dataTransfer.files[0]); });
   app.querySelectorAll("[data-k]").forEach(el => el.addEventListener("change", () => { const k = el.dataset.k; let v = el.type === "checkbox" ? el.checked : el.value; if (k === "frame_step") v = +v; if (k === "scale_meters") v = v === "" ? null : +v; S.settings[k] = v; if (k === "view") { S.settings.underwater_preprocess = ["side_under", "bottom"].includes(v); render(); } }));
   app.querySelectorAll("[data-mode]").forEach(b => b.onclick = () => { S.clickMode = b.dataset.mode; render(); });
   $("#clearWl")?.addEventListener("click", () => { S.clicks.wl = []; render(); }); $("#clearSc")?.addEventListener("click", () => { S.clicks.sc = []; render(); });
   $("#startBtn")?.addEventListener("click", startAnalysis);
+  $("#toCand")?.addEventListener("click", async () => { await setCandidateVideo(S.file); go(4); });
   if (S.video) {
     const sc = $("#segScrub"); sc.oninput = () => { S.scrubT = +sc.value; $("#scrubT").textContent = fmtSec(S.scrubT); drawSetupCanvas(); };
     const stepBy = (d) => { S.scrubT = Math.max(0, Math.min(S.videoInfo.duration, (S.scrubT ?? segStart()) + d / S.videoInfo.fps)); render(); };

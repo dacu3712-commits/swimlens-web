@@ -14,6 +14,7 @@ import { loadRefs, saveRef, deleteRef, alignRef, drawRef, refAngle } from "./viz
 import { attachPolish, measuresOf } from "./polishui.js";
 import { gatherHistory, historyHtml, historyChartSpec } from "./history.js";
 let REFS = {};
+import { initCandidates, renderCandidates } from "./candidates.js";
 
 export const KINDS = {
   catch: "캐치 끝 (팔꿈치 각도)",
@@ -97,7 +98,12 @@ export function buildResults(photos, configs) {
 }
 
 // ------------------------------------------------------------------ 화면
-export function initPhoto(c) { ctx = c; }
+export function initPhoto(c) {
+  ctx = c;
+  initCandidates({ $: c.$, esc: c.esc, toast: c.toast,
+    addSelected: async (cand, canvas) => { await addPhotoFromCanvas(canvas, { kind: cand.kind, name: `영상 ${cand.t.toFixed(2)}초`, side: cand.side || "right" }); },
+    onDone: () => { renderPhoto(); setTimeout(() => c.$("#pGrid")?.scrollIntoView({ behavior: "smooth" }), 300); } });
+}
 export function photoState() { return P; }
 async function loadImageFile(file) {
   const bmp = await createImageBitmap(file); const k = Math.min(1, MAX_SIDE / Math.max(bmp.width, bmp.height));
@@ -152,7 +158,7 @@ export async function renderPhoto() {
   const { app, $, esc, STROKES, toast } = ctx;
   try { REFS = await loadRefs(); } catch { REFS = {}; }
   const results = buildResults(P.photos, ctx.configs); draftAll(results, ctx.configs.comments, P.comments);
-  app.innerHTML = `<div class="card"><h2>📷 사진 분석</h2>
+  app.innerHTML = `<div id="candBox"></div><div class="card"><h2>📷 사진 분석</h2>
   <p class="muted">영상 대신 <b>분석하고 싶은 순간의 캡처 사진</b>(최대 ${MAX_PHOTOS}장)을 올리세요. 사진마다 어떤 순간인지 고르면 각도 지표와 PDF 를 만듭니다. 점을 끌어서 관절을 바로 고칠 수 있습니다.</p>
   <div class="grid"><label class="f">수강생 이름<input type="text" id="pName" value="${esc(P.name)}"></label><label class="f">영법<select id="pStroke">${Object.entries(STROKES).map(([k, v]) => `<option value="${k}" ${k === P.stroke ? "selected" : ""}>${v}</option>`).join("")}</select></label></div>
   <label class="drop" id="pDrop" style="margin-top:8px"><input type="file" id="pFiles" accept="image/*" multiple><div>🖼 여기를 눌러 사진을 고르거나 끌어다 놓으세요 (${P.photos.length}/${MAX_PHOTOS})</div><div class="muted">권장: 캐치 끝 2~3장, 킥 직전 2장, 글라이드 2장, (정면이면) 좌·우 최대 롤링 각 1장</div></label>
@@ -172,6 +178,7 @@ export async function renderPhoto() {
   <label class="f">우선 개선 포인트 / 마무리 한마디<textarea id="pClosing" style="min-height:60px">${esc(P.extra.closing || "")}</textarea></label>
   <p><button class="btn" id="pPdf">📄 PDF 리포트 만들기</button> <span id="pPdfStatus" class="muted"></span></p></div>` : ""}`;
   // 이벤트
+  renderCandidates($("#candBox"));
   $("#pName").onchange = (e) => { P.name = e.target.value; savePhoto(); }; $("#pStroke").onchange = (e) => { P.stroke = e.target.value; savePhoto(); };
   const drop = $("#pDrop"); drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); }); drop.addEventListener("dragleave", () => drop.classList.remove("over")); drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); addFiles(e.dataTransfer.files); });
   $("#pFiles").onchange = (e) => addFiles(e.target.files);
