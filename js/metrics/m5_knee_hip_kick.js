@@ -48,7 +48,7 @@ export function compute(ctx) {
       const next = ctx.cycles.cycles[p.cycle]; let catchNext = null; if (next) { const ev = armEvents(ctx, next.index, next.start, next.end, "left", "split_time"); catchNext = ev.catch_start ?? next.start; }
       if (ext !== null && catchNext !== null && catchNext > ext) { p.glide_sec = (catchNext - ext) / fps; glides.push(p.glide_sec); } }
     r.summary.glide_sec_mean = glides.length ? glides.reduce((a, b) => a + b) / glides.length : null;
-    r.notes.push(`평영: 킥을 다 찬 뒤 다음 캐치까지 글라이드 ${r.summary.glide_sec_mean != null ? r.summary.glide_sec_mean.toFixed(2) + "초" : "측정 못함"} (참고). 평영 기준값은 임시이니 thresholds.yaml 에서 조정하세요.`);
+    r.notes.push(`평영: 킥을 다 찬 뒤 다음 캐치까지 글라이드 ${r.summary.glide_sec_mean != null ? r.summary.glide_sec_mean.toFixed(2) + "초" : "측정 못함"} (참고).`);
   } else if (!isFly) r.notes.push(`${stroke === "backstroke" ? "배영" : "자유형"}: 사이클당 평균 킥 ${r.summary.kicks_per_cycle_mean.toFixed(1)}회 (참고). 킥 타이밍 판정은 접영에서만 수행합니다.`);
   r.charts.push({ type: "bar", title: "사이클별 킥 직전 무릎 각도", ylabel: "각도 (°)", values: kneeVals, labels: r.per_cycle.map(p => String(p.cycle)), green: th.knee_green, yellowMargin: th.knee_yellow_margin });
   const t = lm.t; const evs = beats.map(b => ({ x: t[b], label: "킥 다운비트", color: "orange" }));
